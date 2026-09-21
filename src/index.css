@@ -1,0 +1,17 @@
+@import url('https://fonts.googleapis.com/css2?family=Manrope:wght@500;600;700;800&family=Inter:wght@400;500;600&display=swap');
+
+@tailwind base;
+@tailwind components;
+@tailwind utilities;
+
+body {
+  @apply bg-surface text-navy-950 font-sans antialiased;
+}
+
+h1, h2, h3, .font-display {
+  font-family: 'Manrope', sans-serif;
+}
+
+.tabular {
+  font-variant-numeric: tabular-nums;
+}
