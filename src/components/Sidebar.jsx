@@ -1,13 +1,16 @@
 import { NavLink } from 'react-router-dom'
+import { useAuth } from '../lib/AuthContext.jsx'
 
 const links = [
   { to: '/', label: 'Overview', end: true },
   { to: '/mandates', label: 'Mandates' },
+  { to: '/schedule', label: 'Monthly schedule' },
   { to: '/collection', label: 'Collection schedule' },
   { to: '/reconciliation', label: 'Reconciliation' },
 ]
 
 export default function Sidebar({ mobileOpen, onNavigate }) {
+  const { user, signOut } = useAuth()
   return (
     <aside
       className={`
@@ -43,7 +46,15 @@ export default function Sidebar({ mobileOpen, onNavigate }) {
         ))}
       </nav>
       <div className="px-6 py-5 border-t border-white/10 text-xs text-navy-100/50">
-        Sandbox mode
+        <p className="truncate" title={user?.email}>
+          {user?.email}
+        </p>
+        <button
+          onClick={signOut}
+          className="mt-2 text-navy-100/80 hover:text-white underline underline-offset-2"
+        >
+          Sign out
+        </button>
       </div>
     </aside>
   )

@@ -1,0 +1,19 @@
+# Keeps the Supabase project from pausing after 7 days of inactivity.
+# Calls a tiny database function (public.ping) every 3 days.
+# The key below is the public "publishable" key, the same one the dashboard
+# already ships in the browser. It is safe to keep in the repo.
+name: Keep Supabase alive
+on:
+  schedule:
+    - cron: '17 6 */3 * *'
+  workflow_dispatch: {}
+jobs:
+  ping:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Call public.ping()
+        run: |
+          curl --fail-with-body -sS -X POST \
+            "https://kaokyiqatzcytgfmphgu.supabase.co/rest/v1/rpc/ping" \
+            -H "apikey: sb_publishable_BfkNFgUf_G_GdWuHyUtRjQ_QuOd-YZJ" \
+            -H "Content-Type: application/json" -d '{}'

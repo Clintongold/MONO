@@ -4,20 +4,18 @@ A standalone payment-operations dashboard for OGFZA's direct debit collections
 via Mono. This app talks only to its own Supabase project — it does not touch
 the cooperative's existing Google Sheets/Apps Script CMS.
 
-## What's real vs. simulated in this build
+## Status of this build
 
-- **Real**: the database schema, the queries, the four dashboard screens.
-- **Simulated**: the "Initiate direct debit" button on the Collection Schedule
-  page. It writes a `processing` payment row, then after ~1.4 seconds
-  randomly resolves it to `successful` or `failed` (insufficient funds) —
-  standing in for what would normally be Mono's webhook callback. This lets
-  you demo and test the UI end-to-end before the real Mono integration
-  exists.
-- **Not yet built**: the backend Edge Function that would call Mono's actual
-  debit endpoint, the webhook receiver, and the scheduled retry job for
-  insufficient-funds failures. Those need a server-side environment (Supabase
-  Edge Functions are a natural fit) because the Mono secret key must never be
-  present in this browser-side app.
+- **Live**: the dashboard reads the cooperative's real members, mandates,
+  payments, schedules and reconciliation data from Supabase.
+- **Sign-in required**: only people on the `executives` list in the database
+  can see anything. A person who has an account but is not on that list sees
+  a "Not authorised" screen.
+- **Read-only**: the dashboard does not write to the database. Direct debits
+  are started from Mono's own dashboard. The Mono webhook (a Supabase Edge
+  Function, not part of this repo) records results.
+- The old "Initiate direct debit" simulator has been removed. It wrote fake
+  payments and must never run against real data.
 
 ## Local setup
 
@@ -34,19 +32,23 @@ fill in your own values.
 npm run dev
 ```
 
-## Seeding demo data
+## Demo data
 
-The database starts empty. To populate it with realistic demo data for a
-presentation:
+The old `seed.sql` demo script was removed on purpose. It deleted every member
+whose ID starts with `OGFZACOOP0`, which now matches real members.
+Do not recreate it against the live project.
 
-1. Open your Supabase project → SQL Editor
-2. Paste in the contents of `seed.sql`
-3. Run it
+## Signing in
 
-It creates 10 members across 5 banks, a mix of mandate statuses, two
-collection periods (August fully reconciled, September in progress with
-paid/retrying/failed rows), and payment history showing the insufficient-funds
-retry pattern. It's safe to re-run — it clears its own rows first.
+1. In Supabase, open Authentication > Users and create the person's login.
+2. Add them to the executives list (run in the SQL editor):
+
+```sql
+insert into public.executives (user_id, email)
+select id, email from auth.users where lower(email) = lower('person@example.com');
+```
+
+To remove access, delete their row from `public.executives`.
 
 ## Deploying via GitHub
 
@@ -70,25 +72,18 @@ The anon/publishable key in `.env` is meant to be public-facing — that's how
 Supabase's client-side model works. Access control is enforced by the Row
 Level Security policies on the database, not by keeping this key secret.
 
-Right now those RLS policies are wide open ("any authenticated user, full
-access") — fine for a presentation, not fine for production. Before real
-executives and real money are involved, split policies by role (e.g.
-Executive: read-only; Payment Administrator: read/write) once Supabase Auth
-roles are set up.
+Row Level Security allows reading only for people on the `executives` list
+(checked by the `is_executive()` database function). Nothing is writable
+through the public key.
 
 The `service_role` key for this project should never appear in this
 repository or in any client-side code. It stays in Supabase's own project
 settings for later use inside a backend Edge Function only.
 
-## Next steps toward a live system
+## Remaining work
 
-1. Tighten RLS policies by role
-2. Build the Supabase Edge Function that holds the Mono secret key and
-   exposes a `debit` action the dashboard calls instead of writing directly
-   to the `payments` table
-3. Build the Mono webhook receiver (mandate + debit events) writing into
-   `webhook_events`, then processing into `payments`/`mandates`
-4. Build the scheduled retry job (insufficient-funds only, capped at the
-   `max_retries_per_day` on each schedule, stopping at `retry_deadline_date`)
-5. Build the CSV export for the Reconciliation page
-6. Only then connect real Mono sandbox credentials, and later live credentials
+1. Per-role access (for example a Payment Administrator who can write)
+2. A server-side function that holds the Mono secret key and starts debits
+3. The scheduled retry job (insufficient-funds only, capped at
+   `max_retries_per_day`, stopping at `retry_deadline_date`)
+4. CSV export for the Reconciliation page

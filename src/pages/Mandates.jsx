@@ -2,12 +2,15 @@ import { useEffect, useState } from 'react'
 import { supabase } from '../lib/supabaseClient.js'
 import TopBar from '../components/TopBar.jsx'
 import StatusBadge from '../components/StatusBadge.jsx'
-import { formatDate } from '../lib/format.js'
+import { formatDate, formatNaira } from '../lib/format.js'
+import CreateMandate from '../components/CreateMandate.jsx'
 
 export default function Mandates() {
   const [mandates, setMandates] = useState([])
   const [loading, setLoading] = useState(true)
   const [error, setError] = useState(null)
+
+  const [reloadKey, setReloadKey] = useState(0)
 
   useEffect(() => {
     let cancelled = false
@@ -28,7 +31,7 @@ export default function Mandates() {
     return () => {
       cancelled = true
     }
-  }, [])
+  }, [reloadKey])
 
   return (
     <div>
@@ -36,6 +39,8 @@ export default function Mandates() {
         title="Mandates"
         description="Direct debit authorizations linking each member to their bank account."
       />
+
+      <CreateMandate onCreated={() => setReloadKey((k) => k + 1)} />
 
       {error && (
         <div className="mx-8 mb-6 rounded-md bg-bad/10 text-bad text-sm px-4 py-3">
@@ -53,13 +58,15 @@ export default function Mandates() {
                 <th className="px-4 py-3 font-medium">Bank</th>
                 <th className="px-4 py-3 font-medium">Type</th>
                 <th className="px-4 py-3 font-medium">Status</th>
+                <th className="px-4 py-3 font-medium">Total limit</th>
                 <th className="px-4 py-3 font-medium">Mandate date</th>
+                <th className="px-4 py-3 font-medium">Link</th>
               </tr>
             </thead>
             <tbody className="divide-y divide-navy-950/5">
               {!loading && mandates.length === 0 && (
                 <tr>
-                  <td colSpan={6} className="px-4 py-6 text-navy-950/50">
+                  <td colSpan={8} className="px-4 py-6 text-navy-950/50">
                     No mandates recorded yet.
                   </td>
                 </tr>
@@ -75,8 +82,21 @@ export default function Mandates() {
                   <td className="px-4 py-3">
                     <StatusBadge status={m.status} />
                   </td>
+                  <td className="px-4 py-3 text-navy-950/70">{m.amount ? formatNaira(m.amount) : '—'}</td>
                   <td className="px-4 py-3 text-navy-950/70">
                     {formatDate(m.start_date || m.created_at)}
+                  </td>
+                  <td className="px-4 py-3">
+                    {m.authorisation_url && m.status === 'initiated' ? (
+                      <button
+                        className="text-gold-600 underline underline-offset-2"
+                        onClick={() => navigator.clipboard?.writeText(m.authorisation_url).catch(() => window.prompt('Copy this link:', m.authorisation_url))}
+                      >
+                        Copy link
+                      </button>
+                    ) : (
+                      '—'
+                    )}
                   </td>
                 </tr>
               ))}

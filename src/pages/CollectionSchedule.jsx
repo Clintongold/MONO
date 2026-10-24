@@ -10,7 +10,6 @@ export default function CollectionSchedule() {
   const [rows, setRows] = useState([])
   const [loading, setLoading] = useState(true)
   const [error, setError] = useState(null)
-  const [actioningId, setActioningId] = useState(null)
 
   const loadPeriods = useCallback(async () => {
     const { data, error } = await supabase
@@ -48,62 +47,6 @@ export default function CollectionSchedule() {
   useEffect(() => {
     if (selectedPeriod) loadRows(selectedPeriod)
   }, [selectedPeriod, loadRows])
-
-  // SANDBOX ACTION: simulates an "Initiate Direct Debit" button.
-  // In production this should call a backend Edge Function that holds the
-  // Mono secret key and calls POST /v3/payments/mandates/{id}/debit -
-  // the browser must never call Mono directly with a secret key.
-  async function handleInitiateDebit(row) {
-    const outstanding = Number(row.total_expected) - Number(row.total_collected)
-    if (outstanding <= 0) return
-    setActioningId(row.id)
-
-    const { data: payment, error: insertErr } = await supabase
-      .from('payments')
-      .insert({
-        member_id: row.member_id,
-        schedule_id: row.id,
-        mandate_id: row.mandate_id,
-        amount: outstanding,
-        status: 'processing',
-      })
-      .select()
-      .single()
-
-    if (insertErr) {
-      setError(insertErr.message)
-      setActioningId(null)
-      return
-    }
-
-    // Simulate the webhook callback that would normally arrive from Mono.
-    setTimeout(async () => {
-      const succeeds = Math.random() > 0.35
-      await supabase
-        .from('payments')
-        .update({
-          status: succeeds ? 'successful' : 'failed',
-          response_code: succeeds ? null : '51',
-          failure_category: succeeds ? null : 'insufficient_funds',
-          payment_date: succeeds ? new Date().toISOString() : null,
-        })
-        .eq('id', payment.id)
-
-      if (succeeds) {
-        const newCollected = Number(row.total_collected) + outstanding
-        await supabase
-          .from('payment_schedules')
-          .update({
-            total_collected: newCollected,
-            status: newCollected >= Number(row.total_expected) ? 'paid' : 'partial',
-          })
-          .eq('id', row.id)
-      }
-
-      await loadRows(selectedPeriod)
-      setActioningId(null)
-    }, 1400)
-  }
 
   return (
     <div>
@@ -145,13 +88,12 @@ export default function CollectionSchedule() {
                 <th className="px-4 py-3 font-medium">Collected</th>
                 <th className="px-4 py-3 font-medium">Outstanding</th>
                 <th className="px-4 py-3 font-medium">Status</th>
-                <th className="px-4 py-3 font-medium"></th>
               </tr>
             </thead>
             <tbody className="divide-y divide-navy-950/5">
               {!loading && rows.length === 0 && (
                 <tr>
-                  <td colSpan={7} className="px-4 py-6 text-navy-950/50">
+                  <td colSpan={6} className="px-4 py-6 text-navy-950/50">
                     No schedule rows for this period.
                   </td>
                 </tr>
@@ -176,17 +118,6 @@ export default function CollectionSchedule() {
                     <td className="px-4 py-3">
                       <StatusBadge status={row.status} />
                     </td>
-                    <td className="px-4 py-3 text-right">
-                      {row.status !== 'paid' && (
-                        <button
-                          onClick={() => handleInitiateDebit(row)}
-                          disabled={actioningId === row.id}
-                          className="text-xs font-medium px-3 py-1.5 rounded-md bg-navy-900 text-white hover:bg-navy-800 disabled:opacity-50"
-                        >
-                          {actioningId === row.id ? 'Initiating…' : 'Initiate direct debit'}
-                        </button>
-                      )}
-                    </td>
                   </tr>
                 )
               })}
@@ -195,9 +126,8 @@ export default function CollectionSchedule() {
         </div>
         {loading && <p className="text-sm text-navy-950/50 mt-4">Loading…</p>}
         <p className="text-xs text-navy-950/40 mt-4">
-          Sandbox: this button simulates a debit attempt and its outcome. Wire it to a backend
-          Edge Function calling Mono's debit endpoint to go live — the Mono secret key must never
-          be called from this browser code.
+          This page is read-only. Direct debits are started from Mono's dashboard; results appear
+          here after Mono reports them to the system.
         </p>
       </section>
     </div>
