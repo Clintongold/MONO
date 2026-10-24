@@ -126,8 +126,9 @@ export default function CollectionSchedule() {
         </div>
         {loading && <p className="text-sm text-navy-950/50 mt-4">Loading…</p>}
         <p className="text-xs text-navy-950/40 mt-4">
-          This page is read-only. Direct debits are started from Mono's dashboard; results appear
-          here after Mono reports them to the system.
+          This page shows each member's expected and collected amount for the month. Schedules are uploaded,
+          previewed and approved on the Monthly schedule page. Debits are started by the system at the set
+          debit hours (or by an executive for a one-off debit), and results appear here after Mono reports them.
         </p>
       </section>
     </div>

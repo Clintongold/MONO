@@ -2,7 +2,7 @@ import { useCallback, useEffect, useMemo, useState } from 'react'
 import { supabase } from '../lib/supabaseClient.js'
 import TopBar from '../components/TopBar.jsx'
 import StatusBadge from '../components/StatusBadge.jsx'
-import { formatNaira, formatDate, formatDateTime, formatPeriod } from '../lib/format.js'
+import { formatNaira, formatDate, formatDateTime, formatPeriod, lagosMonth, lagosToday } from '../lib/format.js'
 
 // ---------------------------------------------------------------- CSV reading
 // Reads the CSV downloaded from the PAYROLL_CURRENT tab. Rows may come in any
@@ -140,7 +140,7 @@ export default function MonthlySchedule() {
   const [busy, setBusy] = useState(false)
   const [msg, setMsg] = useState(null) // { ok, text }
 
-  const [month, setMonth] = useState(new Date().toISOString().slice(0, 7))
+  const [month, setMonth] = useState(lagosMonth())
   const [parsed, setParsed] = useState(null) // { fileName, rows }
 
   const [mIdent, setMIdent] = useState('')
@@ -284,36 +284,80 @@ export default function MonthlySchedule() {
     })
   }
 
-  const manualDebit = () => {
-    const amt = Number(String(mAmount).replace(/,/g, ''))
-    const ok = window.confirm(
-      `Debit ${formatNaira(amt)} from ${mIdent.trim().toUpperCase()} now?` +
-        (mRetry ? '\n\nAuto-retry is ON: failures for insufficient funds retry at the daily slots until month end.' : ''),
-    )
-    if (!ok) return
-    return run('Manual debit', async () => {
+  // Starts one manual debit by calling the server with only the schedule id.
+  // The server works out the amount from the schedule row; nothing numeric is sent.
+  async function startDebit(scheduleId) {
+    const { data, error } = await supabase.functions.invoke('mono-debit', { body: { schedule_id: scheduleId } })
+    if (error) {
+      let detail = error.message
+      try {
+        detail = (await error.context.json()).message || detail
+      } catch (_) { /* keep default */ }
+      throw new Error(detail)
+    }
+    return data?.result || 'sent'
+  }
+
+  const manualDebit = () =>
+    run('Manual debit', async () => {
+      // One cleaned-up ID, used for the lookup, the confirm box and the database call.
+      const ident = mIdent.trim().toUpperCase()
+      const amt = Number(String(mAmount).replace(/,/g, ''))
+      if (!ident) throw new Error('Enter the member\'s internal ID.')
+      if (!(amt > 0)) throw new Error('Enter an amount above zero.')
+      if (!settings?.debits_enabled) throw new Error('Debits are switched OFF. Turn the debit switch ON first, then try again.')
+
+      // Look the member up first so nothing is created for a wrong ID or a member with no ready mandate.
+      const { data: m, error: me } = await supabase
+        .from('members')
+        .select('full_name, ogfza_member_id, status, mandates(status, ready_to_debit)')
+        .eq('ogfza_member_id', ident)
+        .maybeSingle()
+      if (me) throw me
+      if (!m) throw new Error(`No member found with the internal ID ${ident}. Nothing was created.`)
+      if (m.status !== 'active') throw new Error(`${m.full_name} (${ident}) is ${m.status}. Nothing was created.`)
+      const ready = (m.mandates || []).some((x) => x.ready_to_debit && ['approved', 'reinstated'].includes(x.status))
+      if (!ready) throw new Error(`${m.full_name} (${ident}) has no ready-to-debit mandate yet. Nothing was created.`)
+
+      const ok = window.confirm(
+        `Debit ${formatNaira(amt)} from ${m.full_name} (${ident})?` +
+          (mRetry ? '\n\nAuto-retry is ON: failures for insufficient funds retry at the daily slots until month end.' : ''),
+      )
+      if (!ok) return 'Cancelled. Nothing was created.'
+
       const { data: id, error } = await supabase.rpc('create_manual_debit', {
-        p_internal_id: mIdent,
+        p_internal_id: ident,
         p_amount: amt,
         p_note: mNote || null,
         p_auto_retry: mRetry,
       })
       if (error) throw error
-      const { data, error: fe } = await supabase.functions.invoke('mono-debit', { body: { schedule_id: id } })
-      if (fe) {
-        let detail = fe.message
-        try {
-          detail = (await fe.context.json()).message || detail
-        } catch (_) { /* keep default */ }
-        throw new Error('The debit was recorded but not started: ' + detail)
-      }
+
+      // Show the new one-off in the Progress table, whatever happens next.
+      const b = await loadBatches()
+      if (b[0]) setSelectedId(b[0].id)
       setMIdent('')
       setMAmount('')
       setMNote('')
-      await loadBatches()
-      return 'Result: ' + (data?.result || 'sent') + '. The final result arrives from Mono shortly.'
+
+      let result
+      try {
+        result = await startDebit(id)
+      } catch (e) {
+        throw new Error(
+          `The debit was recorded but not started (${e.message}). Find it under "3. Progress" and press "Start debit" when ready. It will not be created twice.`,
+        )
+      }
+      return `Result: ${result}. The final result arrives from Mono shortly.`
     })
-  }
+
+  const startFromRow = (scheduleId) =>
+    run('Start debit', async () => {
+      if (!window.confirm('Start this debit now?')) return 'Cancelled.'
+      const r = await startDebit(scheduleId)
+      await loadDetail(selected.id)
+      return `Result: ${r}. The final result arrives from Mono shortly.`
+    })
 
   const list = groups[tab] || []
   const isDraft = selected?.status === 'draft'
@@ -497,7 +541,8 @@ export default function MonthlySchedule() {
                     <th className="py-2 pr-4 font-medium text-right">Collected</th>
                     <th className="py-2 pr-4 font-medium">Status</th>
                     <th className="py-2 pr-4 font-medium">Attempts</th>
-                    <th className="py-2 font-medium">Last result</th>
+                    <th className="py-2 pr-4 font-medium">Last result</th>
+                    <th className="py-2 font-medium">Action</th>
                   </tr>
                 </thead>
                 <tbody className="divide-y divide-navy-950/5">
@@ -515,13 +560,21 @@ export default function MonthlySchedule() {
                         <td className="py-2 pr-4 text-right">{formatNaira(s.total_collected)}</td>
                         <td className="py-2 pr-4"><StatusBadge status={s.status} /></td>
                         <td className="py-2 pr-4">{p.length}</td>
-                        <td className="py-2 text-navy-950/70">
+                        <td className="py-2 pr-4 text-navy-950/70">
                           {last
                             ? `${last.status}${last.failure_category ? ' · ' + last.failure_category.replace(/_/g, ' ') : ''}${
                                 last.response_code ? ' (' + last.response_code + ')' : ''
                               }`
                             : 'not attempted'}
                           {stale && <span className="text-warn"> · no final result from Mono for 3h+, check Mono</span>}
+                        </td>
+                        <td className="py-2">
+                          {s.kind === 'manual' && s.status === 'pending' && p.length === 0 && selected?.status === 'approved' &&
+                            selected.window_end >= lagosToday() && (
+                              <Button tone="gold" disabled={busy} onClick={() => startFromRow(s.id)}>
+                                Start debit
+                              </Button>
+                            )}
                         </td>
                       </tr>
                     )

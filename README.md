@@ -4,18 +4,49 @@ A standalone payment-operations dashboard for OGFZA's direct debit collections
 via Mono. This app talks only to its own Supabase project — it does not touch
 the cooperative's existing Google Sheets/Apps Script CMS.
 
-## Status of this build
+## What this app does today
 
-- **Live**: the dashboard reads the cooperative's real members, mandates,
+- **Live data**: the dashboard reads the cooperative's real members, mandates,
   payments, schedules and reconciliation data from Supabase.
 - **Sign-in required**: only people on the `executives` list in the database
-  can see anything. A person who has an account but is not on that list sees
-  a "Not authorised" screen.
-- **Read-only**: the dashboard does not write to the database. Direct debits
-  are started from Mono's own dashboard. The Mono webhook (a Supabase Edge
-  Function, not part of this repo) records results.
-- The old "Initiate direct debit" simulator has been removed. It wrote fake
-  payments and must never run against real data.
+  can see or do anything. A person who has an account but is not on that list
+  sees a "Not authorised" screen.
+- **Reads are open to every executive; writes go through checked database
+  functions.** The browser can only read tables. Every change (upload,
+  approve, cancel, debit switch, one-off debit) is a database function that
+  checks `is_executive()` itself.
+- **Monthly schedule page**: upload the month's CSV from the ledger's
+  PAYROLL_CURRENT tab (any row order), preview who will be debited, who is
+  discarded (no ready mandate, inactive member, nothing to debit) and which
+  rows have problems, then approve. Only the approved upload is ever debited,
+  and only inside that month's debit window.
+- **Debit switch**: a master on/off switch. Debits are OFF until an executive
+  turns them on.
+- **One-off debit**: debit one member any amount straight away, with an
+  optional auto-retry. A one-off that was recorded but not started shows a
+  "Start debit" button in the Progress table.
+- **Create mandate**: registers the member as a Mono customer (if needed) and
+  creates a variable e-mandate, then shows Mono's authorisation link to send to
+  the member. The mandate is saved already linked to the member's internal ID.
+- **Collection schedule, Mandates, Reconciliation, Overview**: read-only views
+  of the results.
+
+### Server side (Supabase Edge Functions, in `supabase/functions/`)
+
+- `mono-webhook`: receives Mono's webhooks and records mandates, debits and
+  results. (Not in this repo.)
+- `mono-debit`: starts debits. Run hourly by the scheduler (acts only at the
+  debit hours, 10:00, 14:00, 18:00 and 21:00 Lagos time) and on demand for
+  one-off debits. Only insufficient-funds failures are retried. At most 4
+  attempts per mandate per day. The amount comes from the schedule row, never
+  from the browser.
+- `mono-mandate`: creates the Mono customer and mandate.
+- `mono-import`: one-time member import. To be deleted or its token rotated.
+- Scheduler: a database job (`pg_cron`) calls `mono-debit` at the top of every
+  hour. A GitHub workflow pings the database every 3 days to stop the project
+  pausing.
+
+All dates and times are handled in Lagos time (Africa/Lagos).
 
 ## Local setup
 
@@ -82,8 +113,11 @@ settings for later use inside a backend Edge Function only.
 
 ## Remaining work
 
-1. Per-role access (for example a Payment Administrator who can write)
-2. A server-side function that holds the Mono secret key and starts debits
-3. The scheduled retry job (insufficient-funds only, capped at
-   `max_retries_per_day`, stopping at `retry_deadline_date`)
-4. CSV export for the Reconciliation page
+1. Mono Sweep mandates (waiting on Mono to confirm Sweep is enabled).
+2. Per-member fee payer (the form has the choice; waiting on Mono to confirm
+   `fee_bearer: customer` works on our account).
+3. Per-role access (for example read-only executives who cannot approve or
+   debit). Today every executive can do everything.
+4. Multi-factor sign-in for executives (not set up).
+5. CSV export for the Reconciliation page.
+6. Delete or rotate the `mono-import` function.

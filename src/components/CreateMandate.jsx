@@ -1,6 +1,6 @@
 import { useEffect, useMemo, useState } from 'react'
 import { supabase } from '../lib/supabaseClient.js'
-import { formatNaira } from '../lib/format.js'
+import { formatNaira, lagosToday, lagosPlusMonths } from '../lib/format.js'
 
 // Splits "SURNAME, FIRST MIDDLE" or "FIRST LAST" into two editable guesses.
 // The ledger often lists surname first, so the executive can swap them.
@@ -15,12 +15,8 @@ function guessNames(full) {
   return { first: parts.slice(1).join(' '), last: parts[0] }
 }
 
-const today = () => new Date().toISOString().slice(0, 10)
-const plusMonths = (n) => {
-  const d = new Date()
-  d.setMonth(d.getMonth() + n)
-  return d.toISOString().slice(0, 10)
-}
+// Used unless the member's own address is typed in. Editable on the form.
+const DEFAULT_ADDRESS = 'OGFZA Cooperative, Marble House, OGFZA HQ, Onne, Rivers State'
 
 const field = 'w-full border border-navy-950/20 rounded-md px-3 py-2 text-sm'
 
@@ -66,10 +62,11 @@ export default function CreateMandate({ onCreated }) {
       email: m.email || '',
       phone: m.phone || '',
       amount: '',
-      start_date: today(),
-      end_date: plusMonths(12),
+      start_date: lagosToday(),
+      end_date: lagosPlusMonths(12),
       fee_bearer: 'business',
       existing_customer_id: '',
+      address: DEFAULT_ADDRESS,
       new_customer: false,
     })
   }
@@ -171,6 +168,9 @@ export default function CreateMandate({ onCreated }) {
                 <input className={field} value={form.email} onChange={set('email')} /></label>
               <label className="text-sm"><span className="block text-navy-950/60 mb-1">Phone</span>
                 <input className={field} value={form.phone} onChange={set('phone')} /></label>
+              <label className="text-sm sm:col-span-2"><span className="block text-navy-950/60 mb-1">
+                Address (Mono requires one when registering a new customer. Defaults to the cooperative's office; replace it with the member's own if you have it. Not needed if the member is already registered on Mono)</span>
+                <input className={field} value={form.address} onChange={set('address')} placeholder="House number, street, town, state" /></label>
               <label className="text-sm sm:col-span-2"><span className="block text-navy-950/60 mb-1">
                 Total mandate amount (₦). This is the most that can be collected over the whole period, not per month.</span>
                 <input className={field} inputMode="decimal" value={form.amount} onChange={set('amount')} placeholder="e.g. 3000000" /></label>
