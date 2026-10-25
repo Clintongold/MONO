@@ -1,5 +1,5 @@
 import { useState } from 'react'
-import { useAuth } from '../lib/AuthContext.jsx'
+import { useAuth, takeSignedOutNotice } from '../lib/AuthContext.jsx'
 
 export default function Login() {
   const { signIn } = useAuth()
@@ -7,6 +7,7 @@ export default function Login() {
   const [password, setPassword] = useState('')
   const [submitting, setSubmitting] = useState(false)
   const [error, setError] = useState(null)
+  const [notice] = useState(() => takeSignedOutNotice())
 
   async function handleSubmit(e) {
     e.preventDefault()
@@ -36,6 +37,12 @@ export default function Login() {
           <p className="text-xs text-navy-950/60 mb-5">
             Access is limited to authorised cooperative executives.
           </p>
+
+          {notice && !error && (
+            <div role="status" className="mb-4 rounded-md bg-gold-100 text-gold-600 text-sm px-3 py-2">
+              {notice}
+            </div>
+          )}
 
           {error && (
             <div role="alert" className="mb-4 rounded-md bg-bad/10 text-bad text-sm px-3 py-2">

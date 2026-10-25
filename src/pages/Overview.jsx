@@ -105,7 +105,7 @@ export default function Overview() {
       />
 
       {error && (
-        <div className="mx-8 mb-6 rounded-md bg-bad/10 text-bad text-sm px-4 py-3">
+        <div className="mx-4 md:mx-8 mb-6 rounded-md bg-bad/10 text-bad text-sm px-4 py-3">
           Could not load dashboard data: {error}
         </div>
       )}

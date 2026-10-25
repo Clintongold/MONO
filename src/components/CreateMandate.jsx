@@ -29,6 +29,7 @@ export default function CreateMandate({ onCreated }) {
   const [busy, setBusy] = useState(false)
   const [msg, setMsg] = useState(null)
   const [result, setResult] = useState(null)
+  const [debugInfo, setDebugInfo] = useState(null)
   const [copied, setCopied] = useState(false)
 
   useEffect(() => {
@@ -76,6 +77,7 @@ export default function CreateMandate({ onCreated }) {
   async function submit(force = false) {
     setBusy(true)
     setMsg(null)
+    setDebugInfo(null)
     const amount = Number(String(form.amount).replace(/,/g, ''))
     const { data, error } = await supabase.functions.invoke('mono-mandate', {
       body: { ...form, amount, member_id: member.id, force },
@@ -92,6 +94,7 @@ export default function CreateMandate({ onCreated }) {
     if (out?.needs_force && window.confirm(out.message)) return submit(true)
     if (!out?.ok) {
       setMsg(out?.message || 'Something went wrong.')
+      if (out?.mono_response) setDebugInfo(out.mono_response)
       return
     }
     setResult(out)
@@ -200,6 +203,7 @@ export default function CreateMandate({ onCreated }) {
               The member's name must match their bank account name exactly. Check the spelling and which name is the surname before creating.
             </p>
             {msg && <p className="rounded-md bg-bad/10 text-bad text-sm px-3 py-2 mt-4">{msg}</p>}
+            {debugInfo && <p className="text-xs text-navy-950/60 mt-2 break-all">Mono's full reply: {debugInfo}</p>}
             <button
               disabled={busy || !form.amount}
               onClick={() => submit(false)}

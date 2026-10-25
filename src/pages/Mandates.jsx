@@ -43,14 +43,14 @@ export default function Mandates() {
       <CreateMandate onCreated={() => setReloadKey((k) => k + 1)} />
 
       {error && (
-        <div className="mx-8 mb-6 rounded-md bg-bad/10 text-bad text-sm px-4 py-3">
+        <div className="mx-4 md:mx-8 mb-6 rounded-md bg-bad/10 text-bad text-sm px-4 py-3">
           Could not load mandates: {error}
         </div>
       )}
 
       <section className="px-4 md:px-8 pb-10">
-        <div className="bg-white rounded-md border border-navy-950/10 overflow-hidden">
-          <table className="w-full text-sm">
+        <div className="bg-white rounded-md border border-navy-950/10 overflow-x-auto">
+          <table className="w-full min-w-[900px] text-sm">
             <thead>
               <tr className="text-left text-navy-950/50 border-b border-navy-950/10">
                 <th className="px-4 py-3 font-medium">Member</th>

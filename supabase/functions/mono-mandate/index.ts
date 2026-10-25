@@ -44,6 +44,8 @@ async function mono(path: string, body: unknown) {
   return { res, data };
 }
 const monoMessage = (d: any, fallback: string) => String(d?.message ?? d?.error ?? fallback).slice(0, 300);
+// Mono's own error body (it holds no secrets), shortened, so a rejected field can be found.
+const detail = (d: unknown) => { try { return JSON.stringify(d).slice(0, 800); } catch { return ""; } };
 const isDate = (s: unknown) => typeof s === "string" && /^\d{4}-\d{2}-\d{2}$/.test(s);
 
 Deno.serve(async (req) => {
@@ -103,7 +105,7 @@ Deno.serve(async (req) => {
           ? "Mono says this customer already exists. Copy their customer ID from Mono's dashboard (Customers) and paste it into the form."
           : "Mono could not create the customer: " + monoMessage(data, `HTTP ${res.status}`),
         res.status === 401 ? 502 : 400,
-        { stage: "customer", needs_customer_id: already },
+        { stage: "customer", needs_customer_id: already, mono_response: detail(data) },
       );
     }
     customerId = data?.data?.id ?? data?.data?._id ?? data?.id ?? null;
@@ -117,8 +119,9 @@ Deno.serve(async (req) => {
   await supabase.from("members").update({ mono_customer_id: customerId }).eq("id", member.id);
 
   // ---- 2. mandate (Mono's documented initiate call for variable mandates)
-  // Short and unique (about 15 characters): MND + the member number + a time stamp.
-  const reference = `MND${member.ogfza_member_id.replace(/\D/g, "")}-${Date.now().toString(36)}`;
+  // Letters and numbers only (Mono rejects anything else), short and unique:
+  // MND + the member number + a base-36 time stamp, about 15 characters.
+  const reference = `MND${member.ogfza_member_id.replace(/\D/g, "")}${Date.now().toString(36)}`;
   const payload: Record<string, unknown> = {
     amount: Math.round(amountNaira * 100),
     type: "recurring-debit",
@@ -137,7 +140,12 @@ Deno.serve(async (req) => {
   let { res, data } = await mono("/v2/payments/initiate", payload);
   if (res.status === 404) ({ res, data } = await mono("/v2/payments/initiate-mandate", payload));
   if (!res.ok) {
-    return fail("Mono could not create the mandate: " + monoMessage(data, `HTTP ${res.status}`), 400, { stage: "mandate", customer_id: customerId });
+    // Keep Mono's reply (no secrets in it) so a rejected field can be found from the audit log.
+    await supabase.from("audit_logs").insert({
+      actor: "mono-mandate", action: "mandate_failed", record_type: "member", record_id: member.id,
+      details: { http: res.status, mono_response: detail(data), sent_fields: Object.keys(payload), start_date: b.start_date, end_date: b.end_date, amount_kobo: payload.amount },
+    });
+    return fail("Mono could not create the mandate: " + monoMessage(data, `HTTP ${res.status}`), 400, { stage: "mandate", customer_id: customerId, http: res.status, mono_response: detail(data), sent_fields: Object.keys(payload) });
   }
   const mandateId: string | null = data?.data?.mandate_id ?? data?.data?.mandate ?? null;
   const url: string | null = data?.data?.mono_url ?? null;

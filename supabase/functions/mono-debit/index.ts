@@ -94,8 +94,9 @@ async function attempt(s: any, nowL: ReturnType<typeof lagosNow>, opts: { first_
     .eq("id", s.id).or(`last_attempt_at.is.null,last_attempt_at.lt.${lockBefore}`).select("id");
   if (!locked || locked.length === 0) return out("skipped: already attempted this slot");
 
-  // Short, unique reference (19 characters at most): OGZ + 12 characters of the schedule id + attempt number.
-  const reference = `OGZ${String(s.id).replace(/-/g, "").slice(0, 12)}-${pays!.length + 1}`;
+  // Letters and numbers only (Mono rejects anything else), short and unique, 17 characters:
+  // OGZ + 12 characters of the schedule id + a 2-digit attempt number.
+  const reference = `OGZ${String(s.id).replace(/-/g, "").slice(0, 12)}${String(pays!.length + 1).padStart(2, "0")}`;
 
   const { data: pay, error: ie } = await supabase.from("payments").insert({
     member_id: s.member_id, schedule_id: s.id, mandate_id: m.id, mono_mandate_id: m.mono_mandate_id,

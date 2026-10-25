@@ -6,6 +6,7 @@ import CollectionSchedule from './pages/CollectionSchedule.jsx'
 import Reconciliation from './pages/Reconciliation.jsx'
 import MonthlySchedule from './pages/MonthlySchedule.jsx'
 import Login from './pages/Login.jsx'
+import IdleWarning from './components/IdleWarning.jsx'
 import { AuthProvider, useAuth } from './lib/AuthContext.jsx'
 
 function FullScreenMessage({ children }) {
@@ -54,6 +55,7 @@ function Gate() {
 
   return (
     <Layout>
+      <IdleWarning />
       <Routes>
         <Route path="/" element={<Overview />} />
         <Route path="/mandates" element={<Mandates />} />

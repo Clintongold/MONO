@@ -41,7 +41,7 @@ export default function Reconciliation() {
       />
 
       {error && (
-        <div className="mx-8 mb-6 rounded-md bg-bad/10 text-bad text-sm px-4 py-3">{error}</div>
+        <div className="mx-4 md:mx-8 mb-6 rounded-md bg-bad/10 text-bad text-sm px-4 py-3">{error}</div>
       )}
 
       {latest && (
@@ -57,8 +57,8 @@ export default function Reconciliation() {
         <h2 className="font-display font-semibold text-lg text-navy-950 mb-3">
           Monthly history
         </h2>
-        <div className="bg-white rounded-md border border-navy-950/10 overflow-hidden">
-          <table className="w-full text-sm">
+        <div className="bg-white rounded-md border border-navy-950/10 overflow-x-auto">
+          <table className="w-full min-w-[640px] text-sm">
             <thead>
               <tr className="text-left text-navy-950/50 border-b border-navy-950/10">
                 <th className="px-4 py-3 font-medium">Period</th>

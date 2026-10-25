@@ -1,97 +1,16 @@
 import { useCallback, useEffect, useMemo, useState } from 'react'
 import { supabase } from '../lib/supabaseClient.js'
+import { useAuth } from '../lib/AuthContext.jsx'
+import { readScheduleFile } from '../lib/readSchedule.js'
 import TopBar from '../components/TopBar.jsx'
 import StatusBadge from '../components/StatusBadge.jsx'
 import { formatNaira, formatDate, formatDateTime, formatPeriod, lagosMonth, lagosToday } from '../lib/format.js'
-
-// ---------------------------------------------------------------- CSV reading
-// Reads the CSV downloaded from the PAYROLL_CURRENT tab. Rows may come in any
-// order. It finds the header row by name, so the summary block above the table
-// and any extra columns are ignored.
-function parseCsv(text) {
-  const rows = []
-  let row = []
-  let cell = ''
-  let quoted = false
-  for (let i = 0; i < text.length; i++) {
-    const c = text[i]
-    if (quoted) {
-      if (c === '"' && text[i + 1] === '"') {
-        cell += '"'
-        i++
-      } else if (c === '"') quoted = false
-      else cell += c
-    } else if (c === '"') quoted = true
-    else if (c === ',') {
-      row.push(cell)
-      cell = ''
-    } else if (c === '\n' || c === '\r') {
-      if (c === '\r' && text[i + 1] === '\n') i++
-      row.push(cell)
-      rows.push(row)
-      row = []
-      cell = ''
-    } else cell += c
-  }
-  row.push(cell)
-  rows.push(row)
-  return rows
-}
-
-function cleanAmount(v) {
-  return String(v ?? '').replace(/[₦,\s]/g, '').replace(/^NGN/i, '')
-}
-
-function readSchedule(text) {
-  const rows = parseCsv(text.replace(/^﻿/, ''))
-  const norm = (s) => String(s ?? '').trim().toUpperCase().replace(/\s+/g, ' ')
-  const headerIdx = rows.findIndex((r) => {
-    const h = r.map(norm)
-    return h.includes('INTERNAL ID') && h.includes('TOTAL DEDUCTION')
-  })
-  if (headerIdx < 0) {
-    throw new Error('Could not find the columns "INTERNAL ID" and "TOTAL DEDUCTION". Download the PAYROLL_CURRENT tab as CSV and try again.')
-  }
-  const h = rows[headerIdx].map(norm)
-  const iId = h.indexOf('INTERNAL ID')
-  const iAmt = h.indexOf('TOTAL DEDUCTION')
-  const iName = h.indexOf('FULL NAME')
-  const iMonth = h.indexOf('PAYROLL MONTH')
-  const out = []
-  let month = null
-  for (const r of rows.slice(headerIdx + 1)) {
-    const id = String(r[iId] ?? '').trim()
-    if (!id) continue
-    if (!month && iMonth >= 0) month = guessMonth(r[iMonth])
-    out.push({ internal_id: id, full_name: iName >= 0 ? r[iName] : null, amount: cleanAmount(r[iAmt]) })
-  }
-  return { rows: out, month }
-}
-
-// Returns "YYYY-MM" from "2026-11-26", "26/11/2026", "11/26/2026" or "Nov2026", else null.
-function guessMonth(v) {
-  const s = String(v ?? '').trim()
-  let m = s.match(/^(\d{4})-(\d{2})-\d{2}/)
-  if (m) return `${m[1]}-${m[2]}`
-  m = s.match(/^(\d{1,2})\/(\d{1,2})\/(\d{4})/)
-  if (m) {
-    const a = +m[1], b = +m[2]
-    const month = a > 12 ? b : b > 12 ? a : null // ambiguous (both <= 12): let the user pick
-    return month ? `${m[3]}-${String(month).padStart(2, '0')}` : null
-  }
-  m = s.match(/^([A-Za-z]{3})[a-z]*\s*(\d{4})$/)
-  if (m) {
-    const i = 'jan feb mar apr may jun jul aug sep oct nov dec'.split(' ').indexOf(m[1].toLowerCase())
-    if (i >= 0) return `${m[2]}-${String(i + 1).padStart(2, '0')}`
-  }
-  return null
-}
 
 // ----------------------------------------------------------------- small UI
 function Card({ title, children, right }) {
   return (
     <section className="bg-white rounded-md border border-navy-950/10 mb-6">
-      <div className="flex items-center justify-between px-5 py-4 border-b border-navy-950/10">
+      <div className="flex flex-wrap items-center justify-between gap-3 px-5 py-4 border-b border-navy-950/10">
         <h2 className="font-display font-bold text-navy-950">{title}</h2>
         {right}
       </div>
@@ -131,6 +50,8 @@ const sum = (rows) => rows.reduce((t, r) => t + Number(r.amount || 0), 0)
 
 // --------------------------------------------------------------------- page
 export default function MonthlySchedule() {
+  const { user } = useAuth()
+  const [needsSecond, setNeedsSecond] = useState(false) // two-person rule in force?
   const [settings, setSettings] = useState(null)
   const [batches, setBatches] = useState([])
   const [selectedId, setSelectedId] = useState(null)
@@ -156,6 +77,8 @@ export default function MonthlySchedule() {
       supabase.from('schedule_batches').select('*').order('uploaded_at', { ascending: false }).limit(30),
     ])
     setSettings(s)
+    const { data: ns } = await supabase.rpc('needs_second_approver')
+    setNeedsSecond(ns === true)
     if (error) setMsg({ ok: false, text: error.message })
     setBatches(b || [])
     return b || []
@@ -217,10 +140,11 @@ export default function MonthlySchedule() {
     setMsg(null)
     if (!f) return
     try {
-      const { rows: r, month: m } = readSchedule(await f.text())
-      if (r.length === 0) throw new Error('No member rows found in that file.')
+      setMsg({ ok: true, text: 'Reading the file…' })
+      const { rows: r, month: m, sheet } = await readScheduleFile(f)
+      setMsg(null)
       if (m) setMonth(m)
-      setParsed({ fileName: f.name, rows: r })
+      setParsed({ fileName: f.name, rows: r, sheet })
     } catch (err) {
       setMsg({ ok: false, text: err.message })
     }
@@ -241,20 +165,61 @@ export default function MonthlySchedule() {
       return 'Uploaded. Check the preview below, then approve.'
     })
 
+  // After a one-off is approved: find its schedule and start the debit.
+  async function startApprovedBatch(batchId) {
+    const { data: br, error } = await supabase.from('batch_rows').select('schedule_id').eq('batch_id', batchId).maybeSingle()
+    if (error || !br?.schedule_id) throw new Error('could not find the approved debit')
+    return startDebit(br.schedule_id)
+  }
+
   const approve = () => {
+    const isManual = selected.kind === 'manual'
     const n = groups.will_debit.length
+    const total = Math.round(sum(groups.will_debit) * 100) / 100
+    const first = groups.will_debit[0]
     const ok = window.confirm(
-      `Approve ${n} debits totalling ${formatNaira(sum(groups.will_debit))}?\n\n` +
-        `Debits run from ${formatDate(selected.window_start)} to ${formatDate(selected.window_end)}, ` +
-        `only when the debit switch is ON.`,
+      isManual
+        ? `Approve and debit ${formatNaira(total)} from ${first?.full_name} (${first?.internal_id}) now?`
+        : `Approve ${n} debits totalling ${formatNaira(total)}?\n\n` +
+            `Debits run from ${formatDate(selected.window_start)} to ${formatDate(selected.window_end)}, ` +
+            `only when the debit switch is ON.`,
     )
     if (!ok) return
     return run('Approval', async () => {
-      const { data, error } = await supabase.rpc('approve_batch', { p_batch_id: selected.id })
+      if (isManual && !settings?.debits_enabled) throw new Error('Debits are switched OFF. Turn the debit switch ON first, then approve.')
+      // The count and total you were shown are sent too: the database refuses if the upload changed since.
+      const { data, error } = await supabase.rpc('approve_batch', {
+        p_batch_id: selected.id,
+        p_expected_count: n,
+        p_expected_total: total,
+      })
       if (error) throw error
       await loadBatches()
       await loadDetail(selected.id)
-      return `Approved ${data} debits.`
+      if (!isManual) return `Approved ${data} debits.`
+      let r
+      try {
+        r = await startApprovedBatch(selected.id)
+      } catch (e) {
+        throw new Error(`Approved, but the debit was not started (${e.message}). Press "Start debit" under Progress when ready.`)
+      }
+      await loadDetail(selected.id)
+      return `Approved. Result: ${r}. The final result arrives from Mono shortly.`
+    })
+  }
+
+  const reject = () => {
+    const reason = window.prompt('Why are you rejecting this? The person who prepared it will see your reason.')
+    if (reason === null) return
+    if (reason.trim().length < 3) {
+      setMsg({ ok: false, text: 'A reason is required to reject (a few words at least).' })
+      return
+    }
+    return run('Reject', async () => {
+      const { error } = await supabase.rpc('reject_batch', { p_batch_id: selected.id, p_reason: reason })
+      if (error) throw error
+      await loadBatches()
+      return 'Rejected and sent back to the person who prepared it.'
     })
   }
 
@@ -305,7 +270,6 @@ export default function MonthlySchedule() {
       const amt = Number(String(mAmount).replace(/,/g, ''))
       if (!ident) throw new Error('Enter the member\'s internal ID.')
       if (!(amt > 0)) throw new Error('Enter an amount above zero.')
-      if (!settings?.debits_enabled) throw new Error('Debits are switched OFF. Turn the debit switch ON first, then try again.')
 
       // Look the member up first so nothing is created for a wrong ID or a member with no ready mandate.
       const { data: m, error: me } = await supabase
@@ -320,12 +284,13 @@ export default function MonthlySchedule() {
       if (!ready) throw new Error(`${m.full_name} (${ident}) has no ready-to-debit mandate yet. Nothing was created.`)
 
       const ok = window.confirm(
-        `Debit ${formatNaira(amt)} from ${m.full_name} (${ident})?` +
+        `${needsSecond ? 'Prepare a debit of' : 'Debit'} ${formatNaira(amt)} ${needsSecond ? 'for' : 'from'} ${m.full_name} (${ident})?` +
+          (needsSecond ? '\n\nA different executive will have to approve it before it is debited.' : '') +
           (mRetry ? '\n\nAuto-retry is ON: failures for insufficient funds retry at the daily slots until month end.' : ''),
       )
       if (!ok) return 'Cancelled. Nothing was created.'
 
-      const { data: id, error } = await supabase.rpc('create_manual_debit', {
+      const { data: batchId, error } = await supabase.rpc('create_manual_debit', {
         p_internal_id: ident,
         p_amount: amt,
         p_note: mNote || null,
@@ -333,21 +298,31 @@ export default function MonthlySchedule() {
       })
       if (error) throw error
 
-      // Show the new one-off in the Progress table, whatever happens next.
-      const b = await loadBatches()
-      if (b[0]) setSelectedId(b[0].id)
+      await loadBatches()
+      setSelectedId(batchId)
+      setTab('will_debit')
       setMIdent('')
       setMAmount('')
       setMNote('')
 
+      if (needsSecond) {
+        return `Prepared. A different executive must now open "2. Preview and approve", check it and approve it before ${m.full_name} is debited.`
+      }
+
+      // Only one executive exists, so there is nobody else to approve: approve and start now.
+      if (!settings?.debits_enabled) throw new Error('Prepared, but debits are switched OFF. Turn the debit switch ON, then approve it under "2. Preview and approve".')
+      const { error: ae } = await supabase.rpc('approve_batch', { p_batch_id: batchId, p_expected_count: 1, p_expected_total: amt })
+      if (ae) throw ae
       let result
       try {
-        result = await startDebit(id)
+        result = await startApprovedBatch(batchId)
       } catch (e) {
         throw new Error(
-          `The debit was recorded but not started (${e.message}). Find it under "3. Progress" and press "Start debit" when ready. It will not be created twice.`,
+          `The debit was approved but not started (${e.message}). Find it under "3. Progress" and press "Start debit" when ready. It will not be created twice.`,
         )
       }
+      await loadBatches()
+      await loadDetail(batchId)
       return `Result: ${result}. The final result arrives from Mono shortly.`
     })
 
@@ -359,8 +334,21 @@ export default function MonthlySchedule() {
       return `Result: ${r}. The final result arrives from Mono shortly.`
     })
 
+  // Errors in the file: show them first, so nobody has to hunt.
+  useEffect(() => {
+    if (rows.length === 0) return
+    setTab(rows.some((r) => r.state === 'problem') ? 'problem' : 'will_debit')
+  }, [selectedId, rows.length]) // eslint-disable-line react-hooks/exhaustive-deps
+
   const list = groups[tab] || []
   const isDraft = selected?.status === 'draft'
+  const mine = Boolean(selected && user && selected.uploaded_by_id === user.id)
+  const blocked = isDraft && needsSecond && mine // two-person rule: you cannot approve what you prepared
+  const waiting = batches.filter((b) => b.status === 'draft')
+  // The newest rejection of something I prepared, within the last 7 days.
+  const rejectedMine = batches.find(
+    (b) => b.status === 'rejected' && b.uploaded_by_id === user?.id && Date.now() - new Date(b.rejected_at).getTime() < 7 * 86400_000,
+  )
 
   return (
     <div>
@@ -397,15 +385,45 @@ export default function MonthlySchedule() {
           </Card>
         )}
 
+        {rejectedMine && (
+          <div className="rounded-md bg-bad/10 text-bad text-sm px-4 py-3 mb-6 flex flex-wrap items-center justify-between gap-3">
+            <span>
+              Your upload for {rejectedMine.kind === 'manual' ? 'a one-off debit' : formatPeriod(rejectedMine.period)} was rejected by{' '}
+              {rejectedMine.rejected_by}: {rejectedMine.rejected_reason}. Fix it at the source and upload again.
+            </span>
+            <Button tone="plain" onClick={() => setSelectedId(rejectedMine.id)}>
+              View
+            </Button>
+          </div>
+        )}
+
+        {waiting.length > 0 && (
+          <div className="rounded-md bg-gold-100 text-gold-600 text-sm px-4 py-3 mb-6 flex flex-wrap items-center justify-between gap-3">
+            <span>
+              {waiting.length} item{waiting.length === 1 ? ' is' : 's are'} waiting for approval
+              {needsSecond ? ' by a different executive from the one who prepared it.' : '.'}
+            </span>
+            <Button tone="plain" onClick={() => setSelectedId((waiting.find((b) => b.uploaded_by_id !== user?.id) || waiting[0]).id)}>
+              Review
+            </Button>
+          </div>
+        )}
+
         <Card title="1. Upload the month's schedule">
           <p className="text-sm text-navy-950/70 mb-4">
-            In the ledger, open <b>PAYROLL_CURRENT</b> for the month, then File, Download, <b>CSV</b>. Upload that file here.
-            Row order does not matter. Only the internal ID, name and total deduction are used.
+            Upload the <b>PAYROLL_CURRENT</b> tab for the month as an <b>Excel (.xlsx)</b> or <b>CSV</b> file. It needs the headers
+            <b> INTERNAL ID</b> and <b>TOTAL DEDUCTION</b> (and FULL NAME). Row order does not matter and other columns are ignored.
+            If an Excel workbook has several sheets, the one named PAYROLL_CURRENT is used.
           </p>
           <div className="flex flex-wrap items-end gap-4">
             <label className="text-sm">
               <span className="block text-navy-950/60 mb-1">File</span>
-              <input type="file" accept=".csv,text/csv" onChange={onFile} className="text-sm" />
+              <input
+                type="file"
+                accept=".xlsx,.xlsm,.csv,text/csv,application/vnd.openxmlformats-officedocument.spreadsheetml.sheet"
+                onChange={onFile}
+                className="text-sm"
+              />
             </label>
             <label className="text-sm">
               <span className="block text-navy-950/60 mb-1">Month</span>
@@ -422,7 +440,7 @@ export default function MonthlySchedule() {
           </div>
           {parsed && (
             <p className="text-sm text-navy-950/70 mt-3">
-              {parsed.fileName}: {parsed.rows.length} rows, total {formatNaira(sum(parsed.rows.map((r) => ({ amount: r.amount }))))} for{' '}
+              {parsed.fileName}{parsed.sheet ? ` (sheet ${parsed.sheet})` : ''}: {parsed.rows.length} rows, total {formatNaira(sum(parsed.rows.map((r) => ({ amount: r.amount }))))} for{' '}
               <b>{formatPeriod(month + '-01')}</b>. Check the month before uploading.
             </p>
           )}
@@ -439,7 +457,7 @@ export default function MonthlySchedule() {
               >
                 {batches.map((b) => (
                   <option key={b.id} value={b.id}>
-                    {b.kind === 'manual' ? 'Manual' : formatPeriod(b.period)} · {b.status} · {formatDateTime(b.uploaded_at)}
+                    {b.kind === 'manual' ? 'One-off' : formatPeriod(b.period)} · {b.status === 'draft' ? 'waiting for approval' : b.status} · {formatDateTime(b.uploaded_at)}
                   </option>
                 ))}
               </select>
@@ -451,23 +469,42 @@ export default function MonthlySchedule() {
             <>
               <div className="flex flex-wrap items-center gap-3 mb-4">
                 <StatusBadge status={selected.status} />
+                {isDraft && <span className="text-sm font-medium text-warn">waiting for approval</span>}
                 <span className="text-sm text-navy-950/70">
-                  Debit window {formatDate(selected.window_start)} to {formatDate(selected.window_end)}
+                  {selected.uploaded_by && `Prepared by ${selected.uploaded_by} · `}Debit window {formatDate(selected.window_start)} to {formatDate(selected.window_end)}
                   {selected.approved_by && ` · approved by ${selected.approved_by}`}
                 </span>
               </div>
 
               <div className="grid grid-cols-1 sm:grid-cols-3 gap-3 mb-4">
                 <Stat label="Will be debited" value={groups.will_debit.length} sub={formatNaira(sum(groups.will_debit))} />
-                <Stat label="Discarded (no ready mandate etc.)" value={groups.discarded.length} sub={formatNaira(sum(groups.discarded))} />
-                <Stat label="Problems (need a look)" value={groups.problem.length} sub={formatNaira(sum(groups.problem))} />
+                <Stat label="Not debited this month" value={groups.discarded.length} sub={formatNaira(sum(groups.discarded))} />
+                <Stat label="Errors in the file" value={groups.problem.length} sub={formatNaira(sum(groups.problem))} />
               </div>
+
+              {isDraft && groups.problem.length > 0 && (
+                <div className="rounded-md bg-bad/10 text-bad text-sm px-4 py-3 mb-4">
+                  <b>{groups.problem.length} error{groups.problem.length === 1 ? '' : 's'} in the file.</b> Approval is blocked until
+                  they are fixed in the ledger and the file is uploaded again. The Errors tab shows the row and what is wrong with it.
+                </div>
+              )}
+              {isDraft && groups.discarded.length > 0 && groups.problem.length === 0 && (
+                <p className="text-sm text-navy-950/60 mb-4">
+                  {groups.discarded.length} member{groups.discarded.length === 1 ? ' is' : 's are'} not being debited this month
+                  ({formatNaira(sum(groups.discarded))}). That does not hold anything up. The "Not debited" tab says why for each.
+                </p>
+              )}
+              {selected.status === 'rejected' && (
+                <div className="rounded-md bg-bad/10 text-bad text-sm px-4 py-3 mb-4">
+                  Rejected by {selected.rejected_by}: {selected.rejected_reason}
+                </div>
+              )}
 
               <div className="flex gap-2 mb-3 border-b border-navy-950/10">
                 {[
                   ['will_debit', 'Will be debited'],
-                  ['discarded', 'Discarded'],
-                  ['problem', 'Problems'],
+                  ['discarded', 'Not debited'],
+                  ['problem', 'Errors'],
                 ].map(([k, l]) => (
                   <button
                     key={k}
@@ -485,6 +522,7 @@ export default function MonthlySchedule() {
                 <table className="w-full text-sm">
                   <thead>
                     <tr className="text-left text-navy-950/50 border-b border-navy-950/10">
+                      <th className="py-2 pr-4 font-medium">Row</th>
                       <th className="py-2 pr-4 font-medium">Internal ID</th>
                       <th className="py-2 pr-4 font-medium">Name</th>
                       <th className="py-2 pr-4 font-medium text-right">Amount</th>
@@ -494,12 +532,13 @@ export default function MonthlySchedule() {
                   <tbody className="divide-y divide-navy-950/5">
                     {list.length === 0 && (
                       <tr>
-                        <td colSpan={4} className="py-4 text-navy-950/50">Nothing here.</td>
+                        <td colSpan={5} className="py-4 text-navy-950/50">Nothing here.</td>
                       </tr>
                     )}
                     {list.map((r) => (
                       <tr key={r.id}>
-                        <td className="py-2 pr-4">{r.internal_id}</td>
+                        <td className="py-2 pr-4 text-navy-950/50">{r.row_no ?? '—'}</td>
+                        <td className="py-2 pr-4">{r.internal_id || '—'}</td>
                         <td className="py-2 pr-4">{r.full_name}</td>
                         <td className="py-2 pr-4 text-right">{r.amount == null ? '—' : formatNaira(r.amount)}</td>
                         {tab !== 'will_debit' && <td className="py-2 text-navy-950/70">{r.reason}</td>}
@@ -509,13 +548,23 @@ export default function MonthlySchedule() {
                 </table>
               </div>
 
+              {blocked && (
+                <p className="rounded-md bg-gold-100 text-gold-600 text-sm px-3 py-2 mt-5">
+                  You prepared this, so a different executive must check and approve it. Ask one of them to open this page.
+                </p>
+              )}
               {isDraft && (
-                <div className="flex gap-3 mt-5">
-                  <Button tone="gold" disabled={busy || groups.will_debit.length === 0} onClick={approve}>
-                    Approve {groups.will_debit.length} debits
+                <div className="flex flex-wrap gap-3 mt-5">
+                  <Button tone="gold" disabled={busy || blocked || groups.problem.length > 0 || groups.will_debit.length === 0} onClick={approve}>
+                    {selected.kind === 'manual' ? 'Approve and debit now' : `Approve ${groups.will_debit.length} debits`}
                   </Button>
-                  <Button tone="danger" disabled={busy} onClick={cancel}>
-                    Discard this upload
+                  {!mine && (
+                    <Button tone="danger" disabled={busy} onClick={reject}>
+                      Reject
+                    </Button>
+                  )}
+                  <Button tone="plain" disabled={busy} onClick={cancel}>
+                    {selected.kind === 'manual' ? 'Discard this one-off' : 'Discard this upload'}
                   </Button>
                 </div>
               )}
