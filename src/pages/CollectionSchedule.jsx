@@ -23,6 +23,7 @@ export default function CollectionSchedule() {
     const unique = [...new Set((data || []).map((r) => r.period))]
     setPeriods(unique)
     if (unique.length > 0 && !selectedPeriod) setSelectedPeriod(unique[0])
+    if (unique.length === 0) setLoading(false)
   }, [selectedPeriod])
 
   const loadRows = useCallback(async (period) => {

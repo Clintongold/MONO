@@ -6,6 +6,7 @@ const links = [
   { to: '/mandates', label: 'Mandates' },
   { to: '/schedule', label: 'Monthly schedule' },
   { to: '/collection', label: 'Collection schedule' },
+  { to: '/collected', label: 'Successful collections' },
   { to: '/reconciliation', label: 'Reconciliation' },
 ]
 

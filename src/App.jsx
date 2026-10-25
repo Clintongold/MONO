@@ -3,6 +3,7 @@ import Layout from './components/Layout.jsx'
 import Overview from './pages/Overview.jsx'
 import Mandates from './pages/Mandates.jsx'
 import CollectionSchedule from './pages/CollectionSchedule.jsx'
+import CollectionsReport from './pages/CollectionsReport.jsx'
 import Reconciliation from './pages/Reconciliation.jsx'
 import MonthlySchedule from './pages/MonthlySchedule.jsx'
 import Login from './pages/Login.jsx'
@@ -60,6 +61,7 @@ function Gate() {
         <Route path="/" element={<Overview />} />
         <Route path="/mandates" element={<Mandates />} />
         <Route path="/collection" element={<CollectionSchedule />} />
+        <Route path="/collected" element={<CollectionsReport />} />
         <Route path="/schedule" element={<MonthlySchedule />} />
         <Route path="/reconciliation" element={<Reconciliation />} />
       </Routes>
