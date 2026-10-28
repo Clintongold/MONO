@@ -59,7 +59,7 @@ function lagosNow() {
 
 type Outcome = { schedule_id: string; result: string };
 
-async function attempt(s: any, nowL: ReturnType<typeof lagosNow>, opts: { first_only: boolean; enforce_hour_lock: boolean; max_per_day: number }): Promise<Outcome> {
+async function attempt(s: any, nowL: ReturnType<typeof lagosNow>, opts: { first_only: boolean; enforce_hour_lock: boolean; max_per_day: number; allow_customer_fee: boolean }): Promise<Outcome> {
   const out = (result: string): Outcome => ({ schedule_id: s.id, result });
   const maxPerDay = Math.min(opts.max_per_day, MAX_ATTEMPTS_PER_MANDATE_PER_DAY);
   const remaining = Number(s.total_expected) - Number(s.total_collected);
@@ -80,6 +80,11 @@ async function attempt(s: any, nowL: ReturnType<typeof lagosNow>, opts: { first_
     .select("id", { count: "exact", head: true }).eq("mandate_id", s.mandate_id).gte("attempted_at", nowL.startOfDayUtc);
   if (ce) return out("db error counting today's attempts");
   if ((todays ?? 0) >= maxPerDay) return out("skipped: daily attempt limit reached for this mandate");
+
+  // Fee bearer is sent only when the member pays the fee (Mono's default is the business).
+  // It is refused here unless the master switch is on, so it can never go out by accident.
+  const customerPays = s.fee_bearer === "customer";
+  if (customerPays && !opts.allow_customer_fee) return out("skipped: customer-paid fee is not switched on");
 
   const { data: m } = await supabase.from("mandates")
     .select("id,mono_mandate_id,status,ready_to_debit,member_id").eq("id", s.mandate_id).maybeSingle();
@@ -111,7 +116,10 @@ async function attempt(s: any, nowL: ReturnType<typeof lagosNow>, opts: { first_
       method: "POST",
       headers: { "Content-Type": "application/json", accept: "application/json", "mono-sec-key": MONO_KEY },
       // Naira to kobo, from the amount worked out above (never from the browser).
-      body: JSON.stringify({ amount: Math.round(remaining * 100), reference, narration: `OGFZA Cooperative deduction ${String(s.period).slice(0, 7)}` }),
+      body: JSON.stringify({
+        amount: Math.round(remaining * 100), reference, narration: `OGFZA Cooperative deduction ${String(s.period).slice(0, 7)}`,
+        ...(customerPays ? { fee_bearer: "customer" } : {}),
+      }),
     });
     body = await res.json().catch(() => null);
   } catch (_e) {
@@ -121,7 +129,7 @@ async function attempt(s: any, nowL: ReturnType<typeof lagosNow>, opts: { first_
   }
 
   const note = JSON.stringify({ http: res.status, status: body?.status ?? null, message: body?.message ?? null, data_status: body?.data?.status ?? null }).slice(0, 500);
-  await supabase.from("audit_logs").insert({ actor: "mono-debit", action: "debit_initiated", record_type: "payment", record_id: pay.id, details: { reference, amount: remaining, response: note } });
+  await supabase.from("audit_logs").insert({ actor: "mono-debit", action: "debit_initiated", record_type: "payment", record_id: pay.id, details: { reference, amount: remaining, fee_bearer: customerPays ? "customer" : "business", response: note } });
 
   if (res.ok) {
     if (body?.data?.id) await supabase.from("payments").update({ mono_transaction_id: String(body.data.id) }).eq("id", pay.id);
@@ -166,7 +174,7 @@ Deno.serve(async (req) => {
     if (nowL.date < s.initiation_date || nowL.date > s.retry_deadline_date) {
       return json({ message: "This one-off debit's window has passed. Create a new one." }, 409);
     }
-    const r = await attempt(s, nowL, { first_only: true, enforce_hour_lock: false, max_per_day: st.attempts_per_day });
+    const r = await attempt(s, nowL, { first_only: true, enforce_hour_lock: false, max_per_day: st.attempts_per_day, allow_customer_fee: st.allow_customer_fee === true });
     return json(r);
   }
 
@@ -188,7 +196,7 @@ Deno.serve(async (req) => {
   const results: Outcome[] = [];
   for (const s of due ?? []) {
     if (s.kind === "manual" && !s.auto_retry) continue; // manual one-shots run only on demand
-    results.push(await attempt(s, nowL, { first_only: false, enforce_hour_lock: true, max_per_day: st.attempts_per_day }));
+    results.push(await attempt(s, nowL, { first_only: false, enforce_hour_lock: true, max_per_day: st.attempts_per_day, allow_customer_fee: st.allow_customer_fee === true }));
   }
   const tally: Record<string, number> = {};
   for (const r of results) tally[r.result.split(":")[0]] = (tally[r.result.split(":")[0]] ?? 0) + 1;

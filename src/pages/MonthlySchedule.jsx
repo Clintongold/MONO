@@ -414,6 +414,7 @@ export default function MonthlySchedule() {
             Upload the <b>PAYROLL_CURRENT</b> tab for the month as an <b>Excel (.xlsx)</b> or <b>CSV</b> file. It needs the headers
             <b> INTERNAL ID</b> and <b>TOTAL DEDUCTION</b> (and FULL NAME). Row order does not matter and other columns are ignored.
             If an Excel workbook has several sheets, the one named PAYROLL_CURRENT is used.
+            An optional <b>ON LOAN</b> column (YES or NO) says who pays Mono's fee: YES, the member; NO or blank, the cooperative.
           </p>
           <div className="flex flex-wrap items-end gap-4">
             <label className="text-sm">
@@ -482,6 +483,22 @@ export default function MonthlySchedule() {
                 <Stat label="Errors in the file" value={groups.problem.length} sub={formatNaira(sum(groups.problem))} />
               </div>
 
+              {groups.will_debit.length > 0 && (() => {
+                const memberPays = groups.will_debit.filter((r) => r.fee_bearer === 'customer')
+                const coopPays = groups.will_debit.length - memberPays.length
+                return (
+                  <div className="rounded-md bg-navy-950/5 text-navy-950 text-sm px-4 py-3 mb-4">
+                    <b>Mono fee:</b> {memberPays.length} member{memberPays.length === 1 ? '' : 's'} pay it (ON LOAN is YES in the file), the cooperative
+                    pays it for {coopPays}. The "Fee paid by" column shows each row.
+                    {memberPays.length > 0 && !settings?.allow_customer_fee && (
+                      <div className="text-bad mt-1">
+                        Member-paid fees are not switched on yet, so those {memberPays.length} debits will NOT be sent until they are.
+                      </div>
+                    )}
+                  </div>
+                )
+              })()}
+
               {isDraft && groups.problem.length > 0 && (
                 <div className="rounded-md bg-bad/10 text-bad text-sm px-4 py-3 mb-4">
                   <b>{groups.problem.length} error{groups.problem.length === 1 ? '' : 's'} in the file.</b> Approval is blocked until
@@ -526,6 +543,7 @@ export default function MonthlySchedule() {
                       <th className="py-2 pr-4 font-medium">Internal ID</th>
                       <th className="py-2 pr-4 font-medium">Name</th>
                       <th className="py-2 pr-4 font-medium text-right">Amount</th>
+                      {tab === 'will_debit' && <th className="py-2 font-medium">Fee paid by</th>}
                       {tab !== 'will_debit' && <th className="py-2 font-medium">Reason</th>}
                     </tr>
                   </thead>
@@ -541,6 +559,9 @@ export default function MonthlySchedule() {
                         <td className="py-2 pr-4">{r.internal_id || '—'}</td>
                         <td className="py-2 pr-4">{r.full_name}</td>
                         <td className="py-2 pr-4 text-right">{r.amount == null ? '—' : formatNaira(r.amount)}</td>
+                        {tab === 'will_debit' && (
+                          <td className="py-2 text-navy-950/70">{r.fee_bearer === 'customer' ? 'Member' : 'Cooperative'}</td>
+                        )}
                         {tab !== 'will_debit' && <td className="py-2 text-navy-950/70">{r.reason}</td>}
                       </tr>
                     ))}

@@ -42,6 +42,12 @@ export default function Mandates() {
 
       <CreateMandate onCreated={() => setReloadKey((k) => k + 1)} />
 
+      <div className="px-4 md:px-8 mb-3">
+        <button onClick={() => setReloadKey((k) => k + 1)} className="text-sm underline text-navy-950/70">
+          Refresh the list
+        </button>
+      </div>
+
       {error && (
         <div className="mx-4 md:mx-8 mb-6 rounded-md bg-bad/10 text-bad text-sm px-4 py-3">
           Could not load mandates: {error}
@@ -81,6 +87,9 @@ export default function Mandates() {
                   <td className="px-4 py-3 text-navy-950/70 capitalize">{m.debit_type}</td>
                   <td className="px-4 py-3">
                     <StatusBadge status={m.status} />
+                    {['approved', 'reinstated'].includes(m.status) && !m.ready_to_debit && (
+                      <div className="text-xs text-bad mt-1">Not ready to debit yet. Check this mandate on Mono.</div>
+                    )}
                   </td>
                   <td className="px-4 py-3 text-navy-950/70">{m.amount ? formatNaira(m.amount) : '—'}</td>
                   <td className="px-4 py-3 text-navy-950/70">

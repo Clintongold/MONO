@@ -63,6 +63,8 @@ function extractFromGrid(grid) {
   const iAmt = h.indexOf('TOTAL DEDUCTION')
   const iName = h.indexOf('FULL NAME')
   const iMonth = h.indexOf('PAYROLL MONTH')
+  // Optional. YES means the member pays the Mono fee; NO or blank means the cooperative does.
+  const iLoan = h.indexOf('ON LOAN')
   const out = []
   let month = null
   for (let i = headerIdx + 1; i < grid.length; i++) {
@@ -74,7 +76,13 @@ function extractFromGrid(grid) {
     // kept so the system can report it as an error instead of silently dropping it.
     if (!id && !name && !amt) continue
     if (!month && iMonth >= 0) month = guessMonth(r[iMonth])
-    out.push({ row: i + 1, internal_id: id, full_name: name || null, amount: amt })
+    const row = { row: i + 1, internal_id: id, full_name: name || null, amount: amt }
+    if (iLoan >= 0) {
+      const lv = r[iLoan]
+      // Excel may hand back a real TRUE/FALSE; anything else is passed on as typed and checked by the database.
+      row.on_loan = typeof lv === 'boolean' ? (lv ? 'YES' : 'NO') : String(lv ?? '').trim()
+    }
+    out.push(row)
   }
   return { rows: out, month }
 }

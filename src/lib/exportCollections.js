@@ -1,6 +1,6 @@
 // Builds the month's "successful collections" file as CSV or Excel (.xlsx).
 // Columns are chosen so the file can be pasted straight into the core ledger.
-export const HEADERS = ['INTERNAL ID', 'FULL NAME', 'AMOUNT COLLECTED', 'DEBIT DATE', 'MONO REFERENCE']
+export const HEADERS = ['INTERNAL ID', 'FULL NAME', 'AMOUNT COLLECTED', 'MONO FEE', 'FEE PAID BY', 'DEBIT DATE', 'MONO REFERENCE']
 
 // A cell starting with = + - @ can run as a formula when opened in Excel; neutralise it.
 function safeText(v) {
@@ -9,7 +9,7 @@ function safeText(v) {
 }
 
 function toGrid(rows) {
-  return rows.map((r) => [safeText(r.internal_id), safeText(r.full_name), Number(r.amount), r.date || '', safeText(r.reference)])
+  return rows.map((r) => [safeText(r.internal_id), safeText(r.full_name), Number(r.amount), r.fee == null ? '' : Number(r.fee), r.fee_paid_by === 'customer' ? 'Member' : 'Cooperative', r.date || '', safeText(r.reference)])
 }
 
 export function buildCsv(rows) {
@@ -28,9 +28,9 @@ export async function buildXlsx(rows, sheetName) {
   const ws = wb.addWorksheet(String(sheetName || 'Collections').slice(0, 31))
   ws.addRow(HEADERS).font = { bold: true }
   for (const l of toGrid(rows)) ws.addRow(l)
-  ws.columns = [{ width: 16 }, { width: 34 }, { width: 18, style: { numFmt: '#,##0.00' } }, { width: 14 }, { width: 24 }]
+  ws.columns = [{ width: 16 }, { width: 34 }, { width: 18, style: { numFmt: '#,##0.00' } }, { width: 12, style: { numFmt: '#,##0.00' } }, { width: 14 }, { width: 14 }, { width: 24 }]
   ws.views = [{ state: 'frozen', ySplit: 1 }]
-  const total = ws.addRow(['', 'TOTAL', rows.reduce((a, r) => a + Number(r.amount), 0)])
+  const total = ws.addRow(['', 'TOTAL', rows.reduce((a, r) => a + Number(r.amount), 0), rows.reduce((a, r) => a + Number(r.fee || 0), 0)])
   total.font = { bold: true }
   return await wb.xlsx.writeBuffer()
 }
