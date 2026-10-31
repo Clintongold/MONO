@@ -57,7 +57,6 @@ export default function MonthlySchedule() {
   const [batches, setBatches] = useState([])
   const [selectedId, setSelectedId] = useState(null)
   const [rows, setRows] = useState([])
-  const [mandateBearer, setMandateBearer] = useState({})
   const [schedules, setSchedules] = useState([])
   const [tab, setTab] = useState('will_debit')
   const [busy, setBusy] = useState(false)
@@ -102,12 +101,6 @@ export default function MonthlySchedule() {
     ])
     setRows(r || [])
     setSchedules(s || [])
-    // Which mandates were created with the member paying Mono's fee (fixed at creation by Mono).
-    const ids = [...new Set((r || []).filter((x) => x.fee_bearer === 'customer' && x.mandate_id).map((x) => x.mandate_id))]
-    if (ids.length) {
-      const { data: ms } = await supabase.from('mandates').select('id, fee_bearer').in('id', ids)
-      setMandateBearer(Object.fromEntries((ms || []).map((m) => [m.id, m.fee_bearer])))
-    } else setMandateBearer({})
   }, [])
 
   useEffect(() => {
@@ -422,7 +415,7 @@ export default function MonthlySchedule() {
             Upload the <b>PAYROLL_CURRENT</b> tab for the month as an <b>Excel (.xlsx)</b> or <b>CSV</b> file. It needs the headers
             <b> INTERNAL ID</b> and <b>TOTAL DEDUCTION</b> (and FULL NAME). Row order does not matter and other columns are ignored.
             If an Excel workbook has several sheets, the one named PAYROLL_CURRENT is used.
-            An optional <b>ON LOAN</b> column (YES or NO) says who pays Mono's fee: YES, the member; NO or blank, the cooperative.
+            An optional <b>FEE SHARE</b> column holds each member's share of Mono's fee. It must already be inside TOTAL DEDUCTION; it is only recorded for the fee report.
           </p>
           <div className="flex flex-wrap items-end gap-4">
             <label className="text-sm">
@@ -492,26 +485,12 @@ export default function MonthlySchedule() {
               </div>
 
               {groups.will_debit.length > 0 && (() => {
-                const memberPays = groups.will_debit.filter((r) => r.fee_bearer === 'customer')
-                const coopPays = groups.will_debit.length - memberPays.length
+                const shares = groups.will_debit.filter((r) => Number(r.fee_share) > 0)
+                const total = shares.reduce((t, r) => t + Number(r.fee_share), 0)
                 return (
                   <div className="rounded-md bg-navy-950/5 text-navy-950 text-sm px-4 py-3 mb-4">
-                    <b>Mono fee:</b> {memberPays.length} member{memberPays.length === 1 ? '' : 's'} pay it (ON LOAN is YES in the file), the cooperative
-                    pays it for {coopPays}. The "Fee paid by" column shows each row.
-                    {(() => {
-                      const wrong = memberPays.filter((r) => mandateBearer[r.mandate_id] !== 'customer')
-                      return wrong.length > 0 ? (
-                        <div className="text-bad mt-1">
-                          {wrong.length} of the member-pays rows have a mandate that was created with the cooperative paying the fee. Mono does not
-                          allow that to change, so those debits will be skipped until the member has a new mandate created with "member pays".
-                        </div>
-                      ) : null
-                    })()}
-                    {memberPays.length > 0 && !settings?.allow_customer_fee && (
-                      <div className="text-bad mt-1">
-                        Member-paid fees are not switched on yet, so those {memberPays.length} debits will NOT be sent until they are.
-                      </div>
-                    )}
+                    <b>Fee share:</b> {shares.length} member{shares.length === 1 ? '' : 's'} repay part of Mono's fee, {formatNaira(total)} in total
+                    (already included in the amounts above). The cooperative pays Mono for every debit.
                   </div>
                 )
               })()}
@@ -560,7 +539,7 @@ export default function MonthlySchedule() {
                       <th className="py-2 pr-4 font-medium">Internal ID</th>
                       <th className="py-2 pr-4 font-medium">Name</th>
                       <th className="py-2 pr-4 font-medium text-right">Amount</th>
-                      {tab === 'will_debit' && <th className="py-2 font-medium">Fee paid by</th>}
+                      {tab === 'will_debit' && <th className="py-2 font-medium text-right">Fee share</th>}
                       {tab !== 'will_debit' && <th className="py-2 font-medium">Reason</th>}
                     </tr>
                   </thead>
@@ -577,7 +556,7 @@ export default function MonthlySchedule() {
                         <td className="py-2 pr-4">{r.full_name}</td>
                         <td className="py-2 pr-4 text-right">{r.amount == null ? '—' : formatNaira(r.amount)}</td>
                         {tab === 'will_debit' && (
-                          <td className="py-2 text-navy-950/70">{r.fee_bearer === 'customer' ? 'Member' : 'Cooperative'}</td>
+                          <td className="py-2 text-right text-navy-950/70">{Number(r.fee_share) > 0 ? formatNaira(r.fee_share) : '—'}</td>
                         )}
                         {tab !== 'will_debit' && <td className="py-2 text-navy-950/70">{r.reason}</td>}
                       </tr>

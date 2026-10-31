@@ -35,7 +35,7 @@ export default function CollectionsReport() {
       setError(null)
       const { data, error } = await supabase
         .from('payments')
-        .select('amount, fee_amount, payment_date, attempted_at, mono_reference, member_id, members(full_name, ogfza_member_id), payment_schedules!inner(period, fee_bearer)')
+        .select('amount, fee_amount, payment_date, attempted_at, mono_reference, member_id, schedule_id, members(full_name, ogfza_member_id), payment_schedules!inner(period, fee_share)')
         .eq('status', 'successful')
         .eq('payment_schedules.period', period)
         .order('payment_date', { ascending: true })
@@ -47,22 +47,26 @@ export default function CollectionsReport() {
   }, [period])
 
   // One line per member: all of their successful debits for the month added together.
+  // The member's fee share sits inside the amount debited, so it is counted once per schedule.
   const rows = useMemo(() => {
     const by = new Map()
+    const seen = new Set()
     for (const p of pays) {
-      const bearer = p.payment_schedules?.fee_bearer === 'customer' ? 'customer' : 'business'
-      const k = p.member_id + '|' + bearer
-      const cur = by.get(k) || {
+      const cur = by.get(p.member_id) || {
         internal_id: p.members?.ogfza_member_id || '',
         full_name: p.members?.full_name || '',
-        amount: 0, fee: null, fee_paid_by: bearer, date: '', refs: [],
+        amount: 0, fee: null, fee_share: 0, date: '', refs: [],
       }
       cur.amount = Math.round((cur.amount + Number(p.amount)) * 100) / 100
       if (p.fee_amount != null) cur.fee = Math.round(((cur.fee || 0) + Number(p.fee_amount)) * 100) / 100
+      if (p.schedule_id && !seen.has(p.schedule_id)) {
+        seen.add(p.schedule_id)
+        cur.fee_share = Math.round((cur.fee_share + Number(p.payment_schedules?.fee_share || 0)) * 100) / 100
+      }
       const d = dayOf(p.payment_date || p.attempted_at)
       if (d > cur.date) cur.date = d
       if (p.mono_reference) cur.refs.push(p.mono_reference)
-      by.set(k, cur)
+      by.set(p.member_id, cur)
     }
     return [...by.values()]
       .map((r) => ({ ...r, reference: r.refs.join('; ') }))
@@ -70,11 +74,12 @@ export default function CollectionsReport() {
   }, [pays])
 
   const total = rows.reduce((a, r) => a + r.amount, 0)
-  // Fee report for the month, as Mono reported the fee on each successful debit.
-  const feeBy = (who) => rows.filter((r) => r.fee_paid_by === who)
-  const feeSum = (list) => Math.round(list.reduce((a, r) => a + Number(r.fee || 0), 0) * 100) / 100
-  const coopRows = feeBy('business')
-  const memberRows = feeBy('customer')
+  // Fee report for the month: what Mono charged, what members repaid, what the cooperative bore.
+  const r2 = (n) => Math.round(n * 100) / 100
+  const monoFees = r2(rows.reduce((a, r) => a + Number(r.fee || 0), 0))
+  const shares = r2(rows.reduce((a, r) => a + Number(r.fee_share || 0), 0))
+  const netCost = r2(monoFees - shares)
+  const sharers = rows.filter((r) => r.fee_share > 0).length
   const missingFee = rows.filter((r) => r.fee == null).length
   const base = `OGFZA-collections-${String(period).slice(0, 7)}`
 
@@ -113,16 +118,21 @@ export default function CollectionsReport() {
           {loading ? 'Loading…' : `${rows.length} line${rows.length === 1 ? '' : 's'} collected, ${formatNaira(total)} in total.`}
         </p>
         {!loading && rows.length > 0 && (
-          <div className="grid grid-cols-1 sm:grid-cols-2 gap-3 mb-4">
+          <div className="grid grid-cols-1 sm:grid-cols-3 gap-3 mb-4">
             <div className="bg-white rounded-md border border-navy-950/10 px-4 py-3">
-              <div className="text-xs text-navy-950/50">Fees the cooperative paid</div>
-              <div className="text-lg font-semibold text-navy-950">{formatFee(feeSum(coopRows))}</div>
-              <div className="text-xs text-navy-950/50">{coopRows.length} member debit{coopRows.length === 1 ? '' : 's'}</div>
+              <div className="text-xs text-navy-950/50">Mono fees charged</div>
+              <div className="text-lg font-semibold text-navy-950">{formatFee(monoFees)}</div>
+              <div className="text-xs text-navy-950/50">What Mono took on these debits</div>
             </div>
             <div className="bg-white rounded-md border border-navy-950/10 px-4 py-3">
-              <div className="text-xs text-navy-950/50">Fees members paid</div>
-              <div className="text-lg font-semibold text-navy-950">{formatFee(feeSum(memberRows))}</div>
-              <div className="text-xs text-navy-950/50">{memberRows.length} member debit{memberRows.length === 1 ? '' : 's'}</div>
+              <div className="text-xs text-navy-950/50">Fee shares recovered</div>
+              <div className="text-lg font-semibold text-navy-950">{formatFee(shares)}</div>
+              <div className="text-xs text-navy-950/50">{sharers} member{sharers === 1 ? '' : 's'} repaid part of the fee</div>
+            </div>
+            <div className="bg-white rounded-md border border-navy-950/10 px-4 py-3">
+              <div className="text-xs text-navy-950/50">Net cost to the cooperative</div>
+              <div className="text-lg font-semibold text-navy-950">{formatFee(netCost)}</div>
+              <div className="text-xs text-navy-950/50">Mono fees minus shares recovered</div>
             </div>
           </div>
         )}
@@ -137,7 +147,7 @@ export default function CollectionsReport() {
                 <th className="px-4 py-3 font-medium">Name</th>
                 <th className="px-4 py-3 font-medium">Collected</th>
                 <th className="px-4 py-3 font-medium">Mono fee</th>
-                <th className="px-4 py-3 font-medium">Fee paid by</th>
+                <th className="px-4 py-3 font-medium">Fee share in amount</th>
                 <th className="px-4 py-3 font-medium">Debit date</th>
               </tr>
             </thead>
@@ -146,12 +156,12 @@ export default function CollectionsReport() {
                 <tr><td colSpan={6} className="px-4 py-6 text-navy-950/50">No successful collections for this month yet.</td></tr>
               )}
               {rows.map((r) => (
-                <tr key={r.internal_id + r.fee_paid_by + r.date}>
+                <tr key={r.internal_id}>
                   <td className="px-4 py-3 text-navy-950/70">{r.internal_id}</td>
                   <td className="px-4 py-3 font-medium text-navy-950">{r.full_name}</td>
                   <td className="px-4 py-3 tabular text-navy-950/80">{formatNaira(r.amount)}</td>
                   <td className="px-4 py-3 tabular text-navy-950/80">{r.fee == null ? '—' : formatFee(r.fee)}</td>
-                  <td className="px-4 py-3 text-navy-950/70">{r.fee_paid_by === 'customer' ? 'Member' : 'Cooperative'}</td>
+                  <td className="px-4 py-3 tabular text-navy-950/80">{r.fee_share > 0 ? formatFee(r.fee_share) : '—'}</td>
                   <td className="px-4 py-3 text-navy-950/70">{r.date}</td>
                 </tr>
               ))}

@@ -180,11 +180,6 @@ export default function CreateMandate({ onCreated }) {
                 <input type="date" className={field} value={form.start_date} onChange={set('start_date')} /></label>
               <label className="text-sm"><span className="block text-navy-950/60 mb-1">End date</span>
                 <input type="date" className={field} value={form.end_date} onChange={set('end_date')} /></label>
-              <label className="text-sm"><span className="block text-navy-950/60 mb-1">Who pays Mono's debit fees</span>
-                <select className={field} value={form.fee_bearer} onChange={set('fee_bearer')}>
-                  <option value="business">The cooperative (default)</option>
-                  <option value="customer">The member (only if Mono has enabled it)</option>
-                </select></label>
               <label className="text-sm"><span className="block text-navy-950/60 mb-1">Mono customer ID (only if already registered there)</span>
                 <input className={field} value={form.existing_customer_id} onChange={set('existing_customer_id')} /></label>
             </div>
