@@ -1,4 +1,5 @@
 import { useEffect, useMemo, useState } from 'react'
+import { invokeFn, SESSION_EXPIRED_TEXT } from '../lib/invokeFn.js'
 import { supabase } from '../lib/supabaseClient.js'
 import { formatNaira, lagosToday, lagosPlusMonths } from '../lib/format.js'
 
@@ -79,9 +80,7 @@ export default function CreateMandate({ onCreated }) {
     setMsg(null)
     setDebugInfo(null)
     const amount = Number(String(form.amount).replace(/,/g, ''))
-    const { data, error } = await supabase.functions.invoke('mono-mandate', {
-      body: { ...form, amount, member_id: member.id, force },
-    })
+    const { data, error } = await invokeFn('mono-mandate', { ...form, amount, member_id: member.id, force })
     setBusy(false)
     let out = data
     if (error) {
@@ -93,7 +92,7 @@ export default function CreateMandate({ onCreated }) {
     }
     if (out?.needs_force && window.confirm(out.message)) return submit(true)
     if (!out?.ok) {
-      setMsg(out?.message || 'Something went wrong.')
+      setMsg(out?.message === 'Unauthorized' ? SESSION_EXPIRED_TEXT : out?.message || 'Something went wrong.')
       if (out?.mono_response) setDebugInfo(out.mono_response)
       return
     }

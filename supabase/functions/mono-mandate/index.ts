@@ -1,6 +1,10 @@
 // mono-mandate: creates a Mono customer (if needed) and a variable e-mandate for
 // a member, and returns Mono's authorisation link (mono_url) to send to them.
 //
+// Also handles {action:"cancel", mandate_id, reason, force?, withdraw?}: cancels an ACTIVE mandate at Mono
+// (PATCH /v3/payments/mandates/{id}/cancel). When two or more executives exist, the person who asks
+// cannot confirm it: a different executive must press Cancel again.
+//
 // Auth: executive only (Authorization: Bearer <user token>); verify_jwt is OFF so
 // this function checks the token itself against the executives list.
 // The mandate row is saved with member_id already set, so Mono's webhooks update
@@ -46,6 +50,76 @@ async function mono(path: string, body: unknown) {
 const monoMessage = (d: any, fallback: string) => String(d?.message ?? d?.error ?? fallback).slice(0, 300);
 // Mono's own error body (it holds no secrets), shortened, so a rejected field can be found.
 const detail = (d: unknown) => { try { return JSON.stringify(d).slice(0, 800); } catch { return ""; } };
+async function monoPatch(path: string) {
+  const res = await fetch(MONO_BASE + path, {
+    method: "PATCH",
+    headers: { accept: "application/json", "mono-sec-key": MONO_KEY },
+  });
+  const data = await res.json().catch(() => null);
+  return { res, data };
+}
+
+async function cancelMandate(b: any, userId: string, actor: string) {
+  const reason = String(b.reason ?? "").trim();
+  const { data: m } = await supabase.from("mandates")
+    .select("id, mono_mandate_id, status, member_id, cancel_requested_by_id, cancel_requested_by, cancel_reason").eq("id", b.mandate_id).maybeSingle();
+  if (!m) return fail("Mandate not found.", 404);
+
+  if (b.withdraw) {
+    if (!m.cancel_requested_by_id) return fail("There is no cancellation request on this mandate.");
+    await supabase.from("mandates").update({ cancel_requested_by_id: null, cancel_requested_by: null, cancel_requested_at: null, cancel_reason: null }).eq("id", m.id);
+    await supabase.from("audit_logs").insert({ actor, action: "mandate_cancel_withdrawn", record_type: "mandate", record_id: m.id, details: { mono_mandate_id: m.mono_mandate_id } });
+    return json({ ok: true, withdrawn: true, message: "The cancellation request was withdrawn." });
+  }
+
+  if (!["approved", "reinstated", "paused"].includes(m.status)) {
+    return fail("Only an active mandate can be cancelled at Mono. A mandate that was never authorised can simply be deleted from the list.");
+  }
+  if (reason.length < 3 && !m.cancel_requested_by_id) return fail("Give a reason for cancelling (a few words at least).");
+
+  const { count: processing } = await supabase.from("payments").select("id", { count: "exact", head: true }).eq("mandate_id", m.id).eq("status", "processing");
+  if ((processing ?? 0) > 0) return fail("A debit on this mandate is still processing. Wait for it to finish before cancelling.", 409);
+
+  if (!b.force) {
+    const { data: open } = await supabase.from("payment_schedules")
+      .select("id, batch:schedule_batches!inner(status)").eq("mandate_id", m.id).in("status", ["pending", "failed"]).eq("batch.status", "approved");
+    if (open && open.length > 0) {
+      return fail(`This mandate has ${open.length} approved debit(s) still waiting. Cancelling it means they will not be collected. Confirm to go on.`, 409, { needs_force: true });
+    }
+  }
+
+  const { count: execCount } = await supabase.from("executives").select("user_id", { count: "exact", head: true });
+  const twoPerson = (execCount ?? 0) >= 2;
+  if (twoPerson) {
+    if (!m.cancel_requested_by_id) {
+      await supabase.from("mandates").update({
+        cancel_requested_by_id: userId, cancel_requested_by: actor, cancel_requested_at: new Date().toISOString(), cancel_reason: reason,
+      }).eq("id", m.id);
+      await supabase.from("audit_logs").insert({ actor, action: "mandate_cancel_requested", record_type: "mandate", record_id: m.id, details: { mono_mandate_id: m.mono_mandate_id, reason } });
+      return json({ ok: true, requested: true, message: "Cancellation requested. A different executive must confirm it before it is sent to Mono." });
+    }
+    if (m.cancel_requested_by_id === userId) {
+      return fail("You asked for this cancellation, so a different executive must confirm it. You can withdraw the request instead.", 403);
+    }
+  }
+
+  const { res, data } = await monoPatch(`/v3/payments/mandates/${m.mono_mandate_id}/cancel`);
+  if (!res.ok) {
+    await supabase.from("audit_logs").insert({ actor, action: "mandate_cancel_failed", record_type: "mandate", record_id: m.id, details: { http: res.status, mono_response: detail(data) } });
+    return fail("Mono could not cancel the mandate: " + monoMessage(data, `HTTP ${res.status}`), 400, { mono_response: detail(data) });
+  }
+  const finalReason = reason || (m as any).cancel_reason || "";
+  await supabase.from("mandates").update({
+    status: "cancelled", ready_to_debit: false,
+    cancel_requested_by_id: null, cancel_requested_by: null, cancel_requested_at: null, cancel_reason: null,
+  }).eq("id", m.id);
+  await supabase.from("audit_logs").insert({
+    actor, action: "mandate_cancelled", record_type: "mandate", record_id: m.id,
+    details: { mono_mandate_id: m.mono_mandate_id, reason: finalReason, requested_by: m.cancel_requested_by ?? actor, confirmed_by: actor },
+  });
+  return json({ ok: true, cancelled: true, message: "Mandate cancelled at Mono." });
+}
+
 const isDate = (s: unknown) => typeof s === "string" && /^\d{4}-\d{2}-\d{2}$/.test(s);
 
 Deno.serve(async (req) => {
@@ -61,8 +135,10 @@ Deno.serve(async (req) => {
   const { data: ex } = await supabase.from("executives").select("email").eq("user_id", u.user.id).maybeSingle();
   if (!ex) return fail("Not authorised", 403);
 
-  // ---- validate input
   const b = await req.json().catch(() => ({}));
+  if (b.action === "cancel") return await cancelMandate(b, u.user.id, ex.email);
+
+  // ---- validate input
   const first = String(b.first_name ?? "").trim();
   const last = String(b.last_name ?? "").trim();
   const email = String(b.email ?? "").trim();

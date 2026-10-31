@@ -1,4 +1,5 @@
 import { useCallback, useEffect, useMemo, useState } from 'react'
+import { invokeFn } from '../lib/invokeFn.js'
 import { supabase } from '../lib/supabaseClient.js'
 import { useAuth } from '../lib/AuthContext.jsx'
 import { readScheduleFile } from '../lib/readSchedule.js'
@@ -56,6 +57,7 @@ export default function MonthlySchedule() {
   const [batches, setBatches] = useState([])
   const [selectedId, setSelectedId] = useState(null)
   const [rows, setRows] = useState([])
+  const [mandateBearer, setMandateBearer] = useState({})
   const [schedules, setSchedules] = useState([])
   const [tab, setTab] = useState('will_debit')
   const [busy, setBusy] = useState(false)
@@ -100,6 +102,12 @@ export default function MonthlySchedule() {
     ])
     setRows(r || [])
     setSchedules(s || [])
+    // Which mandates were created with the member paying Mono's fee (fixed at creation by Mono).
+    const ids = [...new Set((r || []).filter((x) => x.fee_bearer === 'customer' && x.mandate_id).map((x) => x.mandate_id))]
+    if (ids.length) {
+      const { data: ms } = await supabase.from('mandates').select('id, fee_bearer').in('id', ids)
+      setMandateBearer(Object.fromEntries((ms || []).map((m) => [m.id, m.fee_bearer])))
+    } else setMandateBearer({})
   }, [])
 
   useEffect(() => {
@@ -252,7 +260,7 @@ export default function MonthlySchedule() {
   // Starts one manual debit by calling the server with only the schedule id.
   // The server works out the amount from the schedule row; nothing numeric is sent.
   async function startDebit(scheduleId) {
-    const { data, error } = await supabase.functions.invoke('mono-debit', { body: { schedule_id: scheduleId } })
+    const { data, error } = await invokeFn('mono-debit', { schedule_id: scheduleId })
     if (error) {
       let detail = error.message
       try {
@@ -490,6 +498,15 @@ export default function MonthlySchedule() {
                   <div className="rounded-md bg-navy-950/5 text-navy-950 text-sm px-4 py-3 mb-4">
                     <b>Mono fee:</b> {memberPays.length} member{memberPays.length === 1 ? '' : 's'} pay it (ON LOAN is YES in the file), the cooperative
                     pays it for {coopPays}. The "Fee paid by" column shows each row.
+                    {(() => {
+                      const wrong = memberPays.filter((r) => mandateBearer[r.mandate_id] !== 'customer')
+                      return wrong.length > 0 ? (
+                        <div className="text-bad mt-1">
+                          {wrong.length} of the member-pays rows have a mandate that was created with the cooperative paying the fee. Mono does not
+                          allow that to change, so those debits will be skipped until the member has a new mandate created with "member pays".
+                        </div>
+                      ) : null
+                    })()}
                     {memberPays.length > 0 && !settings?.allow_customer_fee && (
                       <div className="text-bad mt-1">
                         Member-paid fees are not switched on yet, so those {memberPays.length} debits will NOT be sent until they are.

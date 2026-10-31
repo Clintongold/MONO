@@ -87,9 +87,14 @@ async function attempt(s: any, nowL: ReturnType<typeof lagosNow>, opts: { first_
   if (customerPays && !opts.allow_customer_fee) return out("skipped: customer-paid fee is not switched on");
 
   const { data: m } = await supabase.from("mandates")
-    .select("id,mono_mandate_id,status,ready_to_debit,member_id").eq("id", s.mandate_id).maybeSingle();
+    .select("id,mono_mandate_id,status,ready_to_debit,member_id,fee_bearer").eq("id", s.mandate_id).maybeSingle();
   if (!m || !m.ready_to_debit || !["approved", "reinstated"].includes(m.status)) return out("skipped: mandate not ready");
   if (m.member_id !== s.member_id) return out("skipped: mandate belongs to another member");
+  // Mono: the fee bearer is fixed when the mandate is created. A mandate created with the business
+  // paying can never take a customer-paid debit, so say so here instead of sending a doomed request.
+  if (customerPays && m.fee_bearer !== "customer") {
+    return out("skipped: this mandate was created with the cooperative paying the fee; it must be created again with member pays");
+  }
 
   // Lock: one atomic update decides which caller may start an attempt for this schedule.
   // A second click or an overlapping run finds last_attempt_at too recent and stops.
@@ -118,7 +123,9 @@ async function attempt(s: any, nowL: ReturnType<typeof lagosNow>, opts: { first_
       // Naira to kobo, from the amount worked out above (never from the browser).
       body: JSON.stringify({
         amount: Math.round(remaining * 100), reference, narration: `OGFZA Cooperative deduction ${String(s.period).slice(0, 7)}`,
-        ...(customerPays ? { fee_bearer: "customer" } : {}),
+        // Sent only when the master switch is on and the mandate was created as member-pays; then it is
+        // always explicit ("customer" or "business") so a customer-paid mandate never guesses a default.
+        ...(opts.allow_customer_fee && m.fee_bearer === "customer" ? { fee_bearer: customerPays ? "customer" : "business" } : {}),
       }),
     });
     body = await res.json().catch(() => null);
