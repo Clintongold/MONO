@@ -412,9 +412,9 @@ export default function MonthlySchedule() {
 
         <Card title="1. Upload the month's schedule">
           <p className="text-sm text-navy-950/70 mb-4">
-            Upload the <b>PAYROLL_CURRENT</b> tab for the month as an <b>Excel (.xlsx)</b> or <b>CSV</b> file. It needs the headers
+            Upload the <b>Mono payroll export</b> tab for the month as an <b>Excel (.xlsx)</b> or <b>CSV</b> file. It needs the headers
             <b> INTERNAL ID</b> and <b>TOTAL DEDUCTION</b> (and FULL NAME). Row order does not matter and other columns are ignored.
-            If an Excel workbook has several sheets, the one named PAYROLL_CURRENT is used.
+            If an Excel workbook has several sheets, the Mono tab (named like PAYROLL_EXPORT_MONO or MONO PAYROLL EXPORT) is used.
             An optional <b>FEE SHARE</b> column holds each member's share of Mono's fee. It must already be inside TOTAL DEDUCTION; it is only recorded for the fee report.
           </p>
           <div className="flex flex-wrap items-end gap-4">

@@ -8,7 +8,8 @@
 
 const MAX_BYTES = 10 * 1024 * 1024
 const MAX_ROWS = 20000
-const PREFERRED_SHEET = 'PAYROLL_CURRENT'
+// PAYROLL_EXPORT carries the fee share, so it wins over PAYROLL_CURRENT when a whole workbook is uploaded.
+const PREFERRED_SHEETS = ['PAYROLL_EXPORT_MONO', 'PAYROLL_EXPORT', 'PAYROLL_CURRENT']
 
 // ------------------------------------------------------------------- CSV
 export function parseCsv(text) {
@@ -152,8 +153,18 @@ export async function readExcelBuffer(buffer) {
     }
     grids.push({ name: ws.name, grid })
   })
-  // Prefer the PAYROLL_CURRENT sheet, otherwise the first sheet that has the right headers.
-  const ordered = [...grids.filter((g) => g.name === PREFERRED_SHEET), ...grids.filter((g) => g.name !== PREFERRED_SHEET)]
+  // Prefer the PAYROLL_EXPORT sheet, then PAYROLL_CURRENT, otherwise the first sheet that has the right headers.
+  // Tab names are matched loosely (spaces, underscores and case ignored), so "MONO PAYROLL EXPORT" and
+  // "PAYROLL_EXPORT_MONO" both count as the Mono tab. The Mono tab always wins over the Accounts tab.
+  const key = (n) => String(n).toUpperCase().replace(/[^A-Z0-9]+/g, ' ').trim()
+  const rank = (n) => {
+    const k = key(n)
+    if (k.includes('MONO') && k.includes('EXPORT')) return 0
+    if (k === 'PAYROLL EXPORT') return 1
+    if (k === 'PAYROLL CURRENT') return 2
+    return 3
+  }
+  const ordered = [...grids].sort((x, y) => rank(x.name) - rank(y.name))
   for (const g of ordered) {
     const res = extractFromGrid(g.grid)
     if (res) return { ...res, sheet: g.name }

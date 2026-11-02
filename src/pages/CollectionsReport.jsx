@@ -16,6 +16,8 @@ export default function CollectionsReport() {
   const [loading, setLoading] = useState(true)
   const [error, setError] = useState(null)
   const [busy, setBusy] = useState(false)
+  const [costs, setCosts] = useState(null)
+  const [costErr, setCostErr] = useState(null)
 
   useEffect(() => {
     ;(async () => {
@@ -25,6 +27,14 @@ export default function CollectionsReport() {
       setPeriods(unique)
       if (unique.length) setPeriod(unique[0])
       else setLoading(false)
+    })()
+  }, [])
+
+  useEffect(() => {
+    ;(async () => {
+      const { data, error } = await supabase.rpc('mono_cost_summary')
+      if (error) setCostErr(/mono_cost_summary/.test(error.message) ? 'The monthly cost table needs SQL 014 to be run first.' : error.message)
+      else setCosts(data || [])
     })()
   }, [])
 
@@ -168,6 +178,59 @@ export default function CollectionsReport() {
             </tbody>
           </table>
         </div>
+        <h2 className="text-base font-semibold text-navy-950 mt-8 mb-1">Cost of running Mono, month by month</h2>
+        <p className="text-xs text-navy-950/50 mb-3">
+          Fees are as Mono reported them on successful debits, for every member. Net cost is what the cooperative actually bears after members' fee shares.
+        </p>
+        {costErr && <div className="rounded-md bg-bad/10 text-bad text-sm px-4 py-3 mb-3">{costErr}</div>}
+        {costs && (
+          <div className="bg-white rounded-md border border-navy-950/10 overflow-x-auto">
+            <table className="w-full min-w-[760px] text-sm">
+              <thead>
+                <tr className="text-left text-navy-950/50 border-b border-navy-950/10">
+                  <th className="px-4 py-3 font-medium">Month</th>
+                  <th className="px-4 py-3 font-medium">Members debited</th>
+                  <th className="px-4 py-3 font-medium">Mono fees</th>
+                  <th className="px-4 py-3 font-medium">On loan members</th>
+                  <th className="px-4 py-3 font-medium">Other members</th>
+                  <th className="px-4 py-3 font-medium">Shares recovered</th>
+                  <th className="px-4 py-3 font-medium">Net cost</th>
+                </tr>
+              </thead>
+              <tbody className="divide-y divide-navy-950/5">
+                {costs.length === 0 && <tr><td colSpan={7} className="px-4 py-6 text-navy-950/50">No successful debits yet.</td></tr>}
+                {costs.map((c) => (
+                  <tr key={c.m_period}>
+                    <td className="px-4 py-3 font-medium text-navy-950">{formatPeriod(c.m_period)}</td>
+                    <td className="px-4 py-3 tabular">{c.m_members}</td>
+                    <td className="px-4 py-3 tabular">{formatFee(c.m_mono_fees)}{c.m_missing_fee > 0 ? ' *' : ''}</td>
+                    <td className="px-4 py-3 tabular text-navy-950/70">{formatFee(c.m_fees_loan_members)}</td>
+                    <td className="px-4 py-3 tabular text-navy-950/70">{formatFee(c.m_fees_other_members)}</td>
+                    <td className="px-4 py-3 tabular text-navy-950/70">{formatFee(c.m_shares_recovered)}</td>
+                    <td className="px-4 py-3 tabular font-semibold text-navy-950">{formatFee(Number(c.m_mono_fees) - Number(c.m_shares_recovered))}</td>
+                  </tr>
+                ))}
+                {costs.length > 1 && (() => {
+                  const t = (k) => costs.reduce((a, c) => a + Number(c[k] || 0), 0)
+                  return (
+                    <tr className="font-semibold bg-navy-950/5">
+                      <td className="px-4 py-3">All months</td>
+                      <td className="px-4 py-3 tabular">{t('m_members')}</td>
+                      <td className="px-4 py-3 tabular">{formatFee(t('m_mono_fees'))}</td>
+                      <td className="px-4 py-3 tabular">{formatFee(t('m_fees_loan_members'))}</td>
+                      <td className="px-4 py-3 tabular">{formatFee(t('m_fees_other_members'))}</td>
+                      <td className="px-4 py-3 tabular">{formatFee(t('m_shares_recovered'))}</td>
+                      <td className="px-4 py-3 tabular">{formatFee(t('m_mono_fees') - t('m_shares_recovered'))}</td>
+                    </tr>
+                  )
+                })()}
+              </tbody>
+            </table>
+          </div>
+        )}
+        {costs && costs.some((c) => c.m_missing_fee > 0) && (
+          <p className="text-xs text-bad mt-2">* Mono has not yet reported a fee on some debits that month, so the figure may be incomplete.</p>
+        )}
         <p className="text-xs text-navy-950/50 mt-3">
           Only debits Mono has confirmed as successful are listed. "Month" is the month the deduction was for. A member debited more than once in it appears once, with the amounts added together.
         </p>
