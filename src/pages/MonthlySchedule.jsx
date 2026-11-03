@@ -4,6 +4,7 @@ import { supabase } from '../lib/supabaseClient.js'
 import { useAuth } from '../lib/AuthContext.jsx'
 import { readScheduleFile } from '../lib/readSchedule.js'
 import TopBar from '../components/TopBar.jsx'
+import MemberPicker from '../components/MemberPicker.jsx'
 import StatusBadge from '../components/StatusBadge.jsx'
 import { formatNaira, formatDate, formatDateTime, formatPeriod, lagosMonth, lagosToday } from '../lib/format.js'
 
@@ -653,13 +654,12 @@ export default function MonthlySchedule() {
 
         <Card title="One-off debit for a single member">
           <p className="text-sm text-navy-950/70 mb-4">
-            Debits one member a chosen amount straight away. The member needs a ready mandate. This does not touch the monthly schedule.
+            Search the member by name, pick them from the list, then enter the amount. Debits them straight away. The member needs a ready mandate. This does not touch the monthly schedule.
           </p>
           <div className="grid grid-cols-1 sm:grid-cols-3 gap-4 mb-4">
             <label className="text-sm">
-              <span className="block text-navy-950/60 mb-1">Internal ID</span>
-              <input value={mIdent} onChange={(e) => setMIdent(e.target.value)} placeholder="OGFZACOOP081"
-                className="w-full border border-navy-950/20 rounded-md px-3 py-2" />
+              <span className="block text-navy-950/60 mb-1">Member</span>
+              <MemberPicker value={mIdent} disabled={busy} onSelect={(m) => setMIdent(m ? m.ogfza_member_id : '')} />
             </label>
             <label className="text-sm">
               <span className="block text-navy-950/60 mb-1">Amount (₦)</span>
