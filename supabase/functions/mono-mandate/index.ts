@@ -59,7 +59,26 @@ async function monoPatch(path: string) {
   return { res, data };
 }
 
-async function cancelMandate(b: any, userId: string, actor: string) {
+// Re-checks the caller's own password on the server (a throwaway client, nothing is stored) and the typed word
+// CANCEL. Five wrong passwords in 15 minutes lock cancelling for that executive until the window passes.
+async function reauth(b: any, authEmail: string, actor: string, mandateId: string): Promise<Response | null> {
+  if (String(b.confirm_text ?? "").trim() !== "CANCEL") return fail("Type CANCEL in capitals to confirm.", 400, { needs_reauth: true });
+  const since = new Date(Date.now() - 15 * 60 * 1000).toISOString();
+  const { count: bad } = await supabase.from("audit_logs").select("id", { count: "exact", head: true })
+    .eq("actor", actor).eq("action", "mandate_cancel_password_failed").gte("created_at", since);
+  if ((bad ?? 0) >= 5) return fail("Too many wrong passwords. Cancelling is locked for 15 minutes.", 429, { needs_reauth: true });
+  const password = String(b.password ?? "");
+  if (!password) return fail("Enter your password to confirm.", 400, { needs_reauth: true });
+  const probe = createClient(Deno.env.get("SUPABASE_URL")!, Deno.env.get("SUPABASE_ANON_KEY")!, { auth: { persistSession: false, autoRefreshToken: false } });
+  const { data, error } = await probe.auth.signInWithPassword({ email: authEmail, password });
+  if (error || !data?.user) {
+    await supabase.from("audit_logs").insert({ actor, action: "mandate_cancel_password_failed", record_type: "mandate", record_id: mandateId, details: {} });
+    return fail("That password is not correct. Nothing was cancelled.", 403, { needs_reauth: true });
+  }
+  return null;
+}
+
+async function cancelMandate(b: any, userId: string, actor: string, authEmail: string) {
   const reason = String(b.reason ?? "").trim();
   const { data: m } = await supabase.from("mandates")
     .select("id, mono_mandate_id, status, member_id, cancel_requested_by_id, cancel_requested_by, cancel_reason").eq("id", b.mandate_id).maybeSingle();
@@ -71,6 +90,9 @@ async function cancelMandate(b: any, userId: string, actor: string) {
     await supabase.from("audit_logs").insert({ actor, action: "mandate_cancel_withdrawn", record_type: "mandate", record_id: m.id, details: { mono_mandate_id: m.mono_mandate_id } });
     return json({ ok: true, withdrawn: true, message: "The cancellation request was withdrawn." });
   }
+
+  const denied = await reauth(b, authEmail, actor, m.id);
+  if (denied) return denied;
 
   if (!["approved", "reinstated", "paused"].includes(m.status)) {
     return fail("Only an active mandate can be cancelled at Mono. A mandate that was never authorised can simply be deleted from the list.");
@@ -136,7 +158,7 @@ Deno.serve(async (req) => {
   if (!ex) return fail("Not authorised", 403);
 
   const b = await req.json().catch(() => ({}));
-  if (b.action === "cancel") return await cancelMandate(b, u.user.id, ex.email);
+  if (b.action === "cancel") return await cancelMandate(b, u.user.id, ex.email, u.user.email ?? ex.email);
 
   // ---- validate input
   const first = String(b.first_name ?? "").trim();

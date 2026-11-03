@@ -5,6 +5,7 @@ import StatusBadge from '../components/StatusBadge.jsx'
 import { formatDate, formatNaira } from '../lib/format.js'
 import CreateMandate from '../components/CreateMandate.jsx'
 import { invokeFn } from '../lib/invokeFn.js'
+import CancelMandateDialog from '../components/CancelMandateDialog.jsx'
 
 export default function Mandates() {
   const [mandates, setMandates] = useState([])
@@ -16,6 +17,7 @@ export default function Mandates() {
   const [note, setNote] = useState(null)
   const [myId, setMyId] = useState(null)
   const [twoPerson, setTwoPerson] = useState(false)
+  const [dialog, setDialog] = useState(null)
 
   useEffect(() => {
     supabase.auth.getUser().then(({ data }) => setMyId(data?.user?.id ?? null))
@@ -46,28 +48,20 @@ export default function Mandates() {
     }
   }
 
-  async function cancelMandate(m, extra = {}) {
-    let reason = ''
-    if (!m.cancel_requested_by_id && !extra.withdraw) {
-      reason = window.prompt('Why is this mandate being cancelled? (required)\nThis cancels it at Mono, and it cannot be undone.')
-      if (reason === null) return
-      if (reason.trim().length < 3) return setNote({ ok: false, text: 'Give a reason of a few words.' })
-    } else if (!extra.withdraw && !window.confirm(`Confirm cancelling this mandate at Mono?\nRequested by ${m.cancel_requested_by}: ${m.cancel_reason || ''}`)) return
+  // Withdrawing a request is harmless, so it needs no password. Starting or confirming a cancellation opens the guarded dialog.
+  async function withdrawCancel(m) {
     setBusy(true)
     setNote(null)
-    const { data, error } = await invokeFn('mono-mandate', { action: 'cancel', mandate_id: m.id, reason, ...extra })
+    const { data, error } = await invokeFn('mono-mandate', { action: 'cancel', mandate_id: m.id, withdraw: true })
     let out = data
     if (error) {
       try { out = await error.context.json() } catch (_) { out = { ok: false, message: error.message } }
-    }
-    if (out?.needs_force && window.confirm(out.message)) {
-      setBusy(false)
-      return cancelMandate(m, { ...extra, force: true })
     }
     setBusy(false)
     setNote({ ok: !!out?.ok, text: out?.message || (out?.ok ? 'Done.' : 'Something went wrong.') })
     if (out?.ok) setReloadKey((k) => k + 1)
   }
+  const cancelMandate = (m) => setDialog({ m, confirming: !!m.cancel_requested_by_id })
 
   useEffect(() => {
     let cancelled = false
@@ -189,7 +183,7 @@ export default function Mandates() {
                           {m.cancel_requested_by_id !== myId && (
                             <button disabled={busy} className="text-bad underline underline-offset-2 mr-3" onClick={() => cancelMandate(m)}>Confirm cancel</button>
                           )}
-                          <button disabled={busy} className="underline underline-offset-2 text-navy-950/70" onClick={() => cancelMandate(m, { withdraw: true })}>Withdraw</button>
+                          <button disabled={busy} className="underline underline-offset-2 text-navy-950/70" onClick={() => withdrawCancel(m)}>Withdraw</button>
                         </div>
                       ) : (
                         <button disabled={busy} className="text-bad underline underline-offset-2" onClick={() => cancelMandate(m)}>
@@ -205,6 +199,16 @@ export default function Mandates() {
         </div>
         {loading && <p className="text-sm text-navy-950/50 mt-4">Loading…</p>}
       </section>
+      {dialog && (
+        <CancelMandateDialog
+          mandate={dialog.m}
+          memberName={dialog.m.members?.full_name}
+          confirming={dialog.confirming}
+          twoPerson={twoPerson}
+          onClose={() => setDialog(null)}
+          onDone={(text) => { setDialog(null); setNote({ ok: true, text }); setReloadKey((k) => k + 1) }}
+        />
+      )}
     </div>
   )
 }
