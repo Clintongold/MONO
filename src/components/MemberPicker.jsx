@@ -102,7 +102,7 @@ export default function MemberPicker({ value, onSelect, disabled }) {
       />
       {loadErr && <div className="text-xs text-bad mt-1">Could not load members: {loadErr}</div>}
       {open && q.trim() && (
-        <ul id="member-results" role="listbox" className="absolute z-20 left-0 right-0 mt-1 bg-white border border-navy-950/20 rounded-md shadow-lg max-h-72 overflow-y-auto">
+        <ul id="member-results" role="listbox" className="mt-1 bg-white border border-navy-950/20 rounded-md shadow-lg max-h-72 overflow-y-auto">
           {results.length === 0 && <li className="px-3 py-2 text-sm text-navy-950/50">No member matches "{q}".</li>}
           {results.map((m, i) => {
             const r = readiness(m)
@@ -113,6 +113,10 @@ export default function MemberPicker({ value, onSelect, disabled }) {
                 aria-selected={i === active}
                 aria-disabled={!r.ok}
                 onMouseEnter={() => setActive(i)}
+                // Keep focus in the box while pressing a result. Otherwise, on a phone the keyboard closes on the first
+                // touch, the page shifts, and the tap never lands on the name.
+                onPointerDown={(e) => e.preventDefault()}
+                onMouseDown={(e) => e.preventDefault()}
                 onClick={() => pick(m)}
                 className={`px-3 py-2 text-sm flex items-center justify-between gap-3 ${r.ok ? 'cursor-pointer' : 'opacity-50 cursor-not-allowed'} ${i === active && r.ok ? 'bg-surface' : ''}`}
               >

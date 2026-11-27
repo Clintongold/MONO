@@ -55,6 +55,7 @@ export default function MonthlySchedule() {
   const { user } = useAuth()
   const [needsSecond, setNeedsSecond] = useState(false) // two-person rule in force?
   const [settings, setSettings] = useState(null)
+  const [overrides, setOverrides] = useState([])
   const [batches, setBatches] = useState([])
   const [selectedId, setSelectedId] = useState(null)
   const [rows, setRows] = useState([])
@@ -79,6 +80,8 @@ export default function MonthlySchedule() {
       supabase.from('schedule_batches').select('*').order('uploaded_at', { ascending: false }).limit(30),
     ])
     setSettings(s)
+    const { data: ov } = await supabase.from('debit_start_overrides').select('period, start_day').gte('period', lagosMonth() + '-01').order('period')
+    setOverrides(ov || [])
     const { data: ns } = await supabase.rpc('needs_second_approver')
     setNeedsSecond(ns === true)
     if (error) setMsg({ ok: false, text: error.message })
@@ -226,12 +229,38 @@ export default function MonthlySchedule() {
   }
 
   const cancel = () => {
-    if (!window.confirm('Cancel this schedule? No further debits will start from it.')) return
-    return run('Cancel', async () => {
+    const oneOff = selected.kind === 'manual'
+    const ask = oneOff
+      ? 'Stop retrying this one-off debit? No new attempt will start. A debit already sent to the bank can still complete.'
+      : 'Cancel this schedule? No further debits will start from it.'
+    if (!window.confirm(ask)) return
+    return run(oneOff ? 'Stop retrying' : 'Cancel', async () => {
       const { error } = await supabase.rpc('cancel_batch', { p_batch_id: selected.id })
       if (error) throw error
       await loadBatches()
-      return 'Schedule cancelled.'
+      return oneOff ? 'Stopped. No more attempts will be made for this one-off debit.' : 'Schedule cancelled.'
+    })
+  }
+
+  // The fifth attempt of the day. The server only allows executives, only when debits are ON, and
+  // only for members who have used their four normal attempts. It cannot be run twice within two minutes.
+  const extraAttempt = () => {
+    const ok = window.confirm(
+      'Use the extra (fifth) attempt now?\n\nEvery member still owing who has already had their four normal attempts today will be tried once more. ' +
+      'Members with a debit still processing are skipped. This is the last attempt Mono allows per day for insufficient funds, so only do it when you expect money to have landed.',
+    )
+    if (!ok) return
+    return run('Extra attempt', async () => {
+      const { data, error } = await invokeFn('mono-debit', { extra_attempt: true })
+      if (error) {
+        let detail = error.message
+        try { detail = (await error.context.json()).message || detail } catch (_) { /* keep default */ }
+        throw new Error(detail)
+      }
+      await loadBatches()
+      const t = data?.tally || {}
+      const sent = t["initiated, waiting for Mono's final webhook"] || 0
+      return `Extra attempt run. ${sent} debit(s) sent to Mono; results appear under Progress in a minute or two.`
     })
   }
 
@@ -382,8 +411,19 @@ export default function MonthlySchedule() {
               </span>
               . Debit hours (Lagos time): {settings.retry_hours.slice(0, settings.attempts_per_day).map((h) => `${h}:00`).join(', ')}.
               Window starts on day {settings.start_day} of the month and ends on its last day.
-              Only insufficient-funds failures are retried automatically.
+              {overrides.map((o) => ` ${formatPeriod(o.period)} is different: it starts on day ${o.start_day}.`).join('')}
+              Insufficient-funds failures are retried at the debit hours. Temporary bank errors (A9, 97) are retried automatically, 15 and 60 minutes later.
             </p>
+            {settings.debits_enabled && (
+              <div className="mt-3">
+                <Button tone="gold" disabled={busy} onClick={extraAttempt}>
+                  Use the extra attempt now
+                </Button>
+                <p className="text-xs text-navy-950/60 mt-1">
+                  The fifth attempt of the day, for members who have used their four normal ones. Works at any hour.
+                </p>
+              </div>
+            )}
           </Card>
         )}
 
@@ -586,11 +626,16 @@ export default function MonthlySchedule() {
                   </Button>
                 </div>
               )}
-              {selected.status === 'approved' && selected.kind === 'bulk' && (
+              {selected.status === 'approved' && (
                 <div className="mt-5">
                   <Button tone="danger" disabled={busy} onClick={cancel}>
-                    Cancel this schedule
+                    {selected.kind === 'manual' ? 'Stop retrying' : 'Cancel this schedule'}
                   </Button>
+                  {selected.kind === 'manual' && (
+                    <p className="text-xs text-navy-950/60 mt-2">
+                      Ends this one-off debit so it is not tried again. It does not affect the monthly schedule or other members.
+                    </p>
+                  )}
                 </div>
               )}
             </>
